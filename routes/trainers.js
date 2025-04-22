@@ -41,6 +41,7 @@ router.get('/:id', async (req, res) => {
 
 // Create a new trainer
 router.post('/', async (req, res) => {
+  console.log('📬 Backend hit: POST /api/trainers', req.body);
   try {
     const { name, email, phone } = req.body; // Extract email and phone
 
