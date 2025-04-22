@@ -1,14 +1,16 @@
+require('dotenv').config();
 const admin = require('firebase-admin');
+const fs = require('fs');
+
 
 // Check if Firebase has already been initialized
 if (!admin.apps.length) {
   try {
-    const serviceAccount = require('../inservicetracker-firebase-adminsdk-fbsvc-9b2f1990ed.json');
-
+    const serviceAccountPath = process.env.FIREBASE_SERVICE_ACCOUNT;
+    const serviceAccount = JSON.parse(fs.readFileSync(serviceAccountPath, 'utf8')); // Read and parse the file
     admin.initializeApp({
       credential: admin.credential.cert(serviceAccount),
-      // Add your Firebase project's database URL
-      databaseURL: "https://console.firebase.google.com/u/0/project/inservicetracker/firestore/databases/-default-/data" // Replace with your actual database URL
+      databaseURL: process.env.FIREBASE_DATABASE_URL
     });
 
     console.log('Firebase Admin initialized successfully');
