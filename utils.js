@@ -26,7 +26,28 @@ const verifyGoogleToken = async (idToken) => {
   }
 };
 
+const verifyMicrosoftToken = async (accessToken) => {
+  try {
+    const axios = require('axios');
+    const response = await axios.get('https://graph.microsoft.com/v1.0/me', {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+    });
+    
+    return {
+      email: response.data.mail || response.data.userPrincipalName,
+      name: response.data.displayName || response.data.userPrincipalName,
+      provider: 'microsoft',
+    };
+  } catch (error) {
+    console.error('Error verifying Microsoft token:', error);
+    throw new Error('Invalid Microsoft access token');
+  }
+};
+
 module.exports = {
   generateId,
-  verifyGoogleToken
+  verifyGoogleToken,
+  verifyMicrosoftToken
 }; 

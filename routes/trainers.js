@@ -64,7 +64,7 @@ router.post('/', async (req, res) => {
       trainer: { id: docRef.id, ...trainerData }
       
     });
-    console.log('Added trainer:', { id: docRef.id, ...trainerData });
+    // console.log('Added trainer:', { id: docRef.id, ...trainerData });
 
   } catch (error) {
     console.error('Error adding trainer:', error);
