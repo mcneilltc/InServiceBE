@@ -23,6 +23,7 @@ import sessionRoutes from './routes/sessions';
 import reportRoutes from './routes/reports';
 import adminRoutes from './routes/admin';
 import ocrRoutes from './routes/ocr';
+import complianceRoutes from './routes/compliance';
 
 app.use('/api/employees', employeeRoutes);
 app.use('/api/training-sessions', trainingSessionRoutes);
@@ -34,6 +35,7 @@ app.use('/api/sessions', sessionRoutes);
 app.use('/api/reports', reportRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/ocr', ocrRoutes);
+app.use('/api/compliance', complianceRoutes);
 
 const { verifyGoogleToken, verifyMicrosoftToken } = require('./utils');
 
