@@ -84,6 +84,32 @@ export const createSession = async (req: Request, res: Response, next: NextFunct
       return res.status(404).json({ message: 'Employee not found' });
     }
 
+    // Duplicate detection: same employee, same calendar day, and (same location OR same topic)
+    const checkForDuplicate = async (employeeId: string, dateStr: string, location: string, topic: string) => {
+      const dayStart = moment(dateStr).startOf('day').toDate();
+      const dayEnd = moment(dateStr).endOf('day').toDate();
+      const sessionsSnap = await db
+        .collection('employees')
+        .doc(employeeId)
+        .collection('trainingSessions')
+        .where('date', '>=', dayStart.toISOString())
+        .where('date', '<=', dayEnd.toISOString())
+        .get();
+
+      for (const doc of sessionsSnap.docs) {
+        const s = doc.data();
+        if ((s.location && s.location === location) || (s.topic && s.topic === topic)) {
+          return { id: doc.id, ...s };
+        }
+      }
+      return null;
+    };
+
+    const existing = await checkForDuplicate(employeeId, date, location, topic);
+    if (existing) {
+      return res.status(409).json({ message: 'Duplicate session detected', existing });
+    }
+
     const sessionData = {
       date,
       location,

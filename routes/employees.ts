@@ -11,6 +11,9 @@ const {
   deleteEmployee 
 } = require('../controllers/employeesController');
 
+// Self-service lookup controller (badge + firstName/lastName or legacy name lookup)
+import { lookupEmployee } from '../controllers/employeeSelfServiceController';
+
 // Get all employees
 router.get('/', getAllEmployees);
 
@@ -19,6 +22,9 @@ router.get('/:id', getEmployeeById);
 
 // Create a new employee
 router.post('/', validate(employeeSchema), createEmployee);
+
+// Self-service lookup (no auth required)
+router.post('/lookup', lookupEmployee);
 
 // Update an employee
 router.put('/:id', validate(updateEmployeeSchema), updateEmployee);

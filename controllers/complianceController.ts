@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { db } from '../config/firebase';
 import * as admin from 'firebase-admin';
 import moment from 'moment';
+import { sendEmail, midMonthEmployeeTemplate, managerMidMonthAlertTemplate } from '../services/messagingService';
 
 const MIDMONTH_THRESHOLD = 2;   // hours required by the 15th
 const MONTHLY_THRESHOLD  = 4;   // hours required by end of month
@@ -132,6 +133,88 @@ export const getComplianceStatus = async (req: Request, res: Response, next: Nex
       },
       allEmployees: employees,
     });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// POST /api/compliance/notify-midmonth
+export const sendMidMonthNotices = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    // Determine current month
+    const monthMoment = moment();
+    const monthStart  = monthMoment.clone().startOf('month').toDate();
+    const monthEnd    = monthMoment.clone().endOf('month').toDate();
+
+    const employeesSnap = await db.collection('employees').where('isActive', '==', true).get();
+    const needsNotice: any[] = [];
+    const managersBySite: Record<string, any[]> = {};
+
+    for (const doc of employeesSnap.docs) {
+      const data = doc.data();
+      const hours = await getEmployeeHoursForMonth(doc.id, monthStart, monthEnd);
+      if (hours < MIDMONTH_THRESHOLD) {
+        needsNotice.push({ id: doc.id, name: data.name || `${data.firstName} ${data.lastName}`.trim(), email: data.email || '', location: data.location || (data.locations && data.locations[0]) || 'Unknown', hours });
+        const site = data.location || (data.locations && data.locations[0]) || 'Unknown';
+        if (!managersBySite[site]) managersBySite[site] = [];
+        if (hours === 0) managersBySite[site].push({ id: doc.id, name: data.name || '', email: data.email || '' });
+      }
+    }
+
+    // Send employee notices (individual)
+    const sendResults = [];
+    for (const emp of needsNotice) {
+      if (!emp.email) continue;
+      const html = midMonthEmployeeTemplate(emp, emp.hours, []);
+      const r = await sendEmail(emp.email, 'Action Required: Inservice Hours Needed', html);
+      sendResults.push({ to: emp.email, result: r });
+    }
+
+    // Send manager alerts for zeros
+    for (const [site, list] of Object.entries(managersBySite)) {
+      if (!list || list.length === 0) continue;
+      // Look up manager email from env or from site config (placeholder)
+      const managerEmail = process.env.MANAGER_EMAIL || '';
+      if (!managerEmail) continue;
+      const html = managerMidMonthAlertTemplate(site, list);
+      const r = await sendEmail(managerEmail, `${site} — ${list.length} employees have 0 inservice hours`, html);
+      sendResults.push({ to: managerEmail, result: r });
+    }
+
+    res.json({ sent: sendResults.length, details: sendResults });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// POST /api/compliance/notify-endofmonth
+export const sendEndOfMonthAlerts = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const monthMoment = moment();
+    const monthStart  = monthMoment.clone().startOf('month').toDate();
+    const monthEnd    = monthMoment.clone().endOf('month').toDate();
+
+    const employeesSnap = await db.collection('employees').where('isActive', '==', true).get();
+    const atRisk: any[] = [];
+    for (const doc of employeesSnap.docs) {
+      const data = doc.data();
+      const hours = await getEmployeeHoursForMonth(doc.id, monthStart, monthEnd);
+      if (hours < MONTHLY_THRESHOLD) {
+        atRisk.push({ id: doc.id, name: data.name || `${data.firstName} ${data.lastName}`.trim(), email: data.email || '', location: data.location || (data.locations && data.locations[0]) || 'Unknown', hours });
+      }
+    }
+
+    const managerEmail = process.env.MANAGER_EMAIL || '';
+    const trainingTeam = process.env.TRAINING_TEAM_EMAIL || '';
+    const recipients = [managerEmail, trainingTeam].filter(Boolean);
+    const results = [];
+    for (const to of recipients) {
+      const html = `<p>Employees not meeting ${MONTHLY_THRESHOLD}-hour requirement:</p><ul>${atRisk.map(a=>`<li>${a.name} — ${a.hours} hrs</li>`).join('')}</ul>`;
+      const r = await sendEmail(to, `End of Month Compliance Alert — ${monthMoment.format('MMMM YYYY')}`, html);
+      results.push({ to, result: r });
+    }
+
+    res.json({ recipients: results.length, details: results });
   } catch (error) {
     next(error);
   }

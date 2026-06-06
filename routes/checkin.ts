@@ -2,6 +2,7 @@ export {};
 const express = require('express');
 const router = express.Router();
 const { db } = require('../config/firebase');
+import { selfCheckin } from '../controllers/checkinController';
 
 router.post('/', async (req, res) => {
   const { sessionId, name, email, phone, location } = req.body;
@@ -63,6 +64,11 @@ try {
     console.error('Error saving check-in:', error);
     res.status(500).json({ message: 'Failed to save check-in.' });
   }
+});
+
+// Self check-in using QR token + badge + firstName/lastName
+router.post('/self', (req, res, next) => {
+  return (selfCheckin as any)(req, res, next);
 });
 
 // Get all check-ins
