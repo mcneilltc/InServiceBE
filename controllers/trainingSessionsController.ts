@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { db } from '../config/firebase';
 import { z } from 'zod';
+import moment from 'moment';
 
 export const sessionSchema = z.object({
   body: z.object({
@@ -9,7 +10,7 @@ export const sessionSchema = z.object({
     startTime: z.string().optional(),
     length: z.number({ message: "Length is required" }).positive(),
     topic: z.string().min(1, "Topic is required"),
-    trainer: z.string().min(1, "Trainer is required"),
+    trainer: z.union([z.string(), z.array(z.string())]),
     trainees: z.array(z.string()).optional()
   })
 });
@@ -105,7 +106,7 @@ export const createSession = async (req: Request, res: Response, next: NextFunct
       return null;
     };
 
-    const existing = await checkForDuplicate(employeeId, date, location, topic);
+    const existing = await checkForDuplicate(employeeId as string, date, location, topic);
     if (existing) {
       return res.status(409).json({ message: 'Duplicate session detected', existing });
     }
@@ -140,6 +141,44 @@ export const createSession = async (req: Request, res: Response, next: NextFunct
     res.status(201).json({ 
       message: 'Training session added', 
       sessionId: docRef.id, 
+      session: { id: docRef.id, ...sessionData }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Create a top-level training offering (not tied to a specific employee)
+export const createTrainingOffering = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { date, location, startTime, length, topic, trainer, trainees } = req.body;
+
+    // Validate required fields
+    if (!date || !location || !length || !topic || !trainer) {
+      return res.status(400).json({
+        message: 'Missing required fields: date, location, length, topic, trainer'
+      });
+    }
+
+    const sessionData = {
+      date,
+      location,
+      startTime: startTime || null,
+      length: parseInt(length),
+      topic,
+      trainer: Array.isArray(trainer) ? trainer : [trainer],
+      trainees: Array.isArray(trainees) ? trainees : [],
+      status: 'scheduled',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+
+    // Create top-level training session offering
+    const docRef = await db.collection('trainingSessions').add(sessionData);
+
+    res.status(201).json({
+      message: 'Training offering created successfully',
+      sessionId: docRef.id,
       session: { id: docRef.id, ...sessionData }
     });
   } catch (error) {
