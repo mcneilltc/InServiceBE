@@ -6,21 +6,32 @@ const { db } = require('../config/firebase');
 // Create a new training session (standalone, not tied to specific employee)
 router.post('/', async (req, res) => {
   try {
-    const { date, location, startTime, length, topic, trainer, name } = req.body;
+    const { date, location, startTime, length, topic, trainer, trainees, name } = req.body;
 
-    if (!date || !location || !topic || !trainer || !name) {
-      return res.status(400).json({ message: 'Required fields missing' });
+    const missingFields = [];
+    if (!date) missingFields.push('date');
+    if (!location) missingFields.push('location');
+    if (!topic) missingFields.push('topic');
+    if (!trainer) missingFields.push('trainer');
+
+    if (missingFields.length > 0) {
+      return res.status(400).json({
+        error: {
+          message: 'Validation Error',
+          details: missingFields.map((field) => ({ path: [field], message: `${field} is required` }))
+        }
+      });
     }
 
     const sessionData = {
-      name,
+      name: name || topic,
       date,
       location,
       startTime: startTime || '',
-      length: length || 0,
+      length: typeof length === 'number' ? length : parseInt(length, 10) || 0,
       topic,
-      trainer,
-      trainees: [],
+      trainer: Array.isArray(trainer) ? trainer : [trainer],
+      trainees: Array.isArray(trainees) ? trainees : [],
       status: 'scheduled',
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()

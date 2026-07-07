@@ -164,7 +164,7 @@ export const createTrainingOffering = async (req: Request, res: Response, next: 
       date,
       location,
       startTime: startTime || null,
-      length: parseInt(length),
+      length: typeof length === 'number' ? length : parseInt(length, 10),
       topic,
       trainer: Array.isArray(trainer) ? trainer : [trainer],
       trainees: Array.isArray(trainees) ? trainees : [],
@@ -173,8 +173,8 @@ export const createTrainingOffering = async (req: Request, res: Response, next: 
       updatedAt: new Date().toISOString()
     };
 
-    // Create top-level training session offering
-    const docRef = await db.collection('trainingSessions').add(sessionData);
+    // Create the shared active session record so the UI list and session lookup both see it.
+    const docRef = await db.collection('sessions').add(sessionData);
 
     res.status(201).json({
       message: 'Training offering created successfully',

@@ -61,4 +61,38 @@ describe('Training Sessions API', () => {
       expect(response.body).toHaveProperty('sessionId', 'new-id');
     });
   });
+
+  describe('POST /api/training-sessions', () => {
+    it('should create a shared active session so the UI list refreshes', async () => {
+      const mockSharedSessionAdd = jest.fn().mockResolvedValue({ id: 'shared-session-id' });
+      const mockLegacySessionAdd = jest.fn().mockResolvedValue({ id: 'legacy-session-id' });
+
+      (db.collection as jest.Mock).mockImplementation((coll) => {
+        if (coll === 'sessions') {
+          return { add: mockSharedSessionAdd };
+        }
+
+        if (coll === 'trainingSessions') {
+          return { add: mockLegacySessionAdd };
+        }
+
+        return { add: jest.fn() };
+      });
+
+      const response = await request(app)
+        .post('/api/training-sessions')
+        .send({
+          date: '2025-01-02',
+          location: 'MCAC',
+          length: 90,
+          topic: 'Active Session Sync',
+          trainer: 'trainer-1',
+          trainees: []
+        });
+
+      expect(response.status).toBe(201);
+      expect(mockSharedSessionAdd).toHaveBeenCalledTimes(1);
+      expect(response.body).toHaveProperty('sessionId', 'shared-session-id');
+    });
+  });
 }); 
