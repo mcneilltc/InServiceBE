@@ -95,4 +95,28 @@ describe('Training Sessions API', () => {
       expect(response.body).toHaveProperty('sessionId', 'shared-session-id');
     });
   });
+
+  describe('PUT /api/sessions/:sessionId', () => {
+    it('should return the updated session data after manual employee and trainer changes', async () => {
+      const mockUpdate = jest.fn().mockResolvedValue(undefined);
+      const mockGet = jest.fn().mockResolvedValue({
+        exists: true,
+        data: () => ({ topic: 'Existing Topic', trainer: ['trainer-1'], trainees: [] })
+      });
+      const mockDoc = jest.fn().mockReturnValue({ get: mockGet, update: mockUpdate });
+      (db.collection as jest.Mock).mockImplementation(() => ({ doc: mockDoc }));
+
+      const response = await request(app)
+        .put('/api/sessions/session-123')
+        .send({
+          trainees: ['employee-1'],
+          trainer: ['trainer-1', 'trainer-2']
+        });
+
+      expect(response.status).toBe(200);
+      expect(response.body.session.trainees).toEqual(['employee-1']);
+      expect(response.body.session.trainer).toEqual(['trainer-1', 'trainer-2']);
+      expect(mockUpdate).toHaveBeenCalled();
+    });
+  });
 }); 

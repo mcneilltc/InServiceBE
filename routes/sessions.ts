@@ -80,12 +80,26 @@ router.put('/:sessionId', async (req, res) => {
       return res.status(404).json({ message: 'Session not found' });
     }
 
-    updateData.updatedAt = new Date().toISOString();
-    await sessionDoc.update(updateData);
+    const normalizedUpdateData = { ...updateData };
+    if (normalizedUpdateData.trainer !== undefined) {
+      normalizedUpdateData.trainer = Array.isArray(normalizedUpdateData.trainer)
+        ? normalizedUpdateData.trainer
+        : [normalizedUpdateData.trainer];
+    }
 
+    if (normalizedUpdateData.trainees !== undefined) {
+      normalizedUpdateData.trainees = Array.isArray(normalizedUpdateData.trainees)
+        ? normalizedUpdateData.trainees
+        : [normalizedUpdateData.trainees];
+    }
+
+    normalizedUpdateData.updatedAt = new Date().toISOString();
+    await sessionDoc.update(normalizedUpdateData);
+
+    const updatedDoc = await sessionDoc.get();
     res.json({
       message: 'Session updated',
-      session: { id: sessionId, ...doc.data(), ...updateData }
+      session: { id: sessionId, ...updatedDoc.data(), ...normalizedUpdateData }
     });
   } catch (error) {
     console.error('Error updating session:', error);
