@@ -8,6 +8,7 @@ const employeeSchema = z.object({
       required_error: "Employee name is required",
     }).min(1, "Name cannot be empty"),
     email: z.string().optional(),
+    alternateEmails: z.array(z.string()).optional(),
     position: z.string().optional(),
     hireDate: z.string().optional(),
     locations: z.array(z.string()).optional(),
@@ -30,6 +31,7 @@ const updateEmployeeSchema = z.object({
   body: z.object({
     name: z.string().min(1, "Name cannot be empty").optional(),
     email: z.string().optional(),
+    alternateEmails: z.array(z.string()).optional(),
     position: z.string().optional(),
     hireDate: z.string().optional(),
     locations: z.array(z.string()).optional(),
@@ -80,7 +82,7 @@ const getEmployeeById = async (req, res, next) => {
 const createEmployee = async (req, res, next) => {
   try {
     const {
-      name, email, position, hireDate, locations, isActive,
+      name, email, alternateEmails, position, hireDate, locations, isActive,
       depth, certificationExpiration, hasSlideCert, hasSwimCert,
       isEliteSupervisor, badgeNumber, firstName, lastName, teamId,
       isSupervisor, supervisorScope
@@ -89,6 +91,7 @@ const createEmployee = async (req, res, next) => {
     const employeeData = {
       name,
       email: email || '',
+      alternateEmails: Array.isArray(alternateEmails) ? alternateEmails : [],
       position: position || '',
       hireDate: hireDate || null,
       locations: Array.isArray(locations) ? locations : [],
@@ -124,7 +127,7 @@ const updateEmployee = async (req, res, next) => {
   try {
     const { id } = req.params;
     const {
-      name, email, position, hireDate, locations, isActive,
+      name, email, alternateEmails, position, hireDate, locations, isActive,
       depth, certificationExpiration, hasSlideCert, hasSwimCert,
       isEliteSupervisor, badgeNumber, firstName, lastName, teamId,
       isSupervisor, supervisorScope
@@ -140,6 +143,7 @@ const updateEmployee = async (req, res, next) => {
     const updateData = {};
     if (name !== undefined) updateData.name = name;
     if (email !== undefined) updateData.email = email;
+    if (alternateEmails !== undefined) updateData.alternateEmails = alternateEmails;
     if (position !== undefined) updateData.position = position;
     if (hireDate !== undefined) updateData.hireDate = hireDate;
     if (locations !== undefined) updateData.locations = locations;

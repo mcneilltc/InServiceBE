@@ -4,6 +4,12 @@ const { db } = require('../config/firebase');
 // Resolves a verified email to a role. Precedence: a supervisor (isSupervisor
 // on an employee record) always wins over trainer, since supervisor access is
 // a superset of trainer access.
+function matchesEmail(data: any, emailLower: string): boolean {
+  if ((data.email || '').toLowerCase() === emailLower) return true;
+  const alternates: string[] = data.alternateEmails || [];
+  return alternates.some((e) => (e || '').toLowerCase() === emailLower);
+}
+
 const resolveRole = async (email: string) => {
   const emailLower = email.toLowerCase();
 
@@ -11,7 +17,7 @@ const resolveRole = async (email: string) => {
     .where('isSupervisor', '==', true)
     .get();
   const matchedSupervisor = employeesSnapshot.docs.find(
-    (doc: any) => (doc.data().email || '').toLowerCase() === emailLower
+    (doc: any) => matchesEmail(doc.data(), emailLower)
   );
 
   if (matchedSupervisor) {
