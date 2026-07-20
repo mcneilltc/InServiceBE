@@ -18,7 +18,9 @@ const upload = multer({
   }
 });
 
-// POST /api/ocr/extract
-router.post('/extract', upload.single('sheet'), extractFromSheet);
+// POST /api/ocr/extract — accepts one or more images: one or more sign-in
+// sheet pages plus (usually) a separate topics-checklist page, all uploaded
+// together and combined into a single Gemini call.
+router.post('/extract', upload.array('sheets', 10), extractFromSheet);
 
 export default router;

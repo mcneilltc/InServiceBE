@@ -9,7 +9,7 @@ export const sessionSchema = z.object({
     location: z.string().min(1, "Location is required"),
     startTime: z.string().optional(),
     length: z.number({ message: "Length is required" }).positive(),
-    topic: z.string().min(1, "Topic is required"),
+    topics: z.array(z.string()).min(1, "At least one topic is required"),
     trainer: z.union([z.string(), z.array(z.string())]),
     trainees: z.array(z.string()).optional()
   })
@@ -27,7 +27,7 @@ export const getAllSessions = async (req: Request, res: Response, next: NextFunc
         const session = sessionDoc.data();
         allSessions.push({
           id: sessionDoc.id,
-          topic: session.topic,
+          topics: session.topics || (session.topic ? [session.topic] : []),
           trainer: session.trainer,
           date: session.date,
           participants: session.trainees ? session.trainees.length : 0,
@@ -61,7 +61,7 @@ export const getEmployeeSessions = async (req: Request, res: Response, next: Nex
       const session = doc.data();
       sessions.push({
         id: doc.id,
-        topic: session.topic,
+        topics: session.topics || (session.topic ? [session.topic] : []),
         trainer: session.trainer,
         date: session.date,
         participants: session.trainees ? session.trainees.length : 0,
@@ -77,7 +77,7 @@ export const getEmployeeSessions = async (req: Request, res: Response, next: Nex
 
 export const createSession = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { date, location, startTime, length, topic, trainer, trainees } = req.body;
+    const { date, location, startTime, length, topics, trainer, trainees } = req.body;
     const { employeeId } = req.params;
 
     const employeeDoc = await db.collection('employees').doc(employeeId).get();
@@ -85,8 +85,8 @@ export const createSession = async (req: Request, res: Response, next: NextFunct
       return res.status(404).json({ message: 'Employee not found' });
     }
 
-    // Duplicate detection: same employee, same calendar day, and (same location OR same topic)
-    const checkForDuplicate = async (employeeId: string, dateStr: string, location: string, topic: string) => {
+    // Duplicate detection: same employee, same calendar day, and (same location OR any topic overlap)
+    const checkForDuplicate = async (employeeId: string, dateStr: string, location: string, topics: string[]) => {
       const dayStart = moment(dateStr).startOf('day').toDate();
       const dayEnd = moment(dateStr).endOf('day').toDate();
       const sessionsSnap = await db
@@ -99,14 +99,16 @@ export const createSession = async (req: Request, res: Response, next: NextFunct
 
       for (const doc of sessionsSnap.docs) {
         const s = doc.data();
-        if ((s.location && s.location === location) || (s.topic && s.topic === topic)) {
+        const sTopics: string[] = s.topics || (s.topic ? [s.topic] : []);
+        const topicOverlap = sTopics.some((t) => topics.includes(t));
+        if ((s.location && s.location === location) || topicOverlap) {
           return { id: doc.id, ...s };
         }
       }
       return null;
     };
 
-    const existing = await checkForDuplicate(employeeId as string, date, location, topic);
+    const existing = await checkForDuplicate(employeeId as string, date, location, topics);
     if (existing) {
       return res.status(409).json({ message: 'Duplicate session detected', existing });
     }
@@ -116,7 +118,7 @@ export const createSession = async (req: Request, res: Response, next: NextFunct
       location,
       startTime: startTime || null,
       length,
-      topic,
+      topics,
       trainer,
       trainees: trainees || [],
       status: 'completed',
@@ -151,12 +153,13 @@ export const createSession = async (req: Request, res: Response, next: NextFunct
 // Create a top-level training offering (not tied to a specific employee)
 export const createTrainingOffering = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { date, location, startTime, length, topic, trainer, trainees } = req.body;
+    const { date, location, startTime, length, topics, trainer, trainees } = req.body;
+    const topicsArray = Array.isArray(topics) ? topics : (topics ? [topics] : []);
 
     // Validate required fields
-    if (!date || !location || !length || !topic || !trainer) {
+    if (!date || !location || !length || topicsArray.length === 0 || !trainer) {
       return res.status(400).json({
-        message: 'Missing required fields: date, location, length, topic, trainer'
+        message: 'Missing required fields: date, location, length, topics, trainer'
       });
     }
 
@@ -165,7 +168,7 @@ export const createTrainingOffering = async (req: Request, res: Response, next: 
       location,
       startTime: startTime || null,
       length: typeof length === 'number' ? length : parseInt(length, 10),
-      topic,
+      topics: topicsArray,
       trainer: Array.isArray(trainer) ? trainer : [trainer],
       trainees: Array.isArray(trainees) ? trainees : [],
       status: 'scheduled',

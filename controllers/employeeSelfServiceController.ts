@@ -70,7 +70,7 @@ export const lookupEmployee = async (req: Request, res: Response, next: NextFunc
         totalHoursThisMonth += hrs;
         thisMonthSessions.push({
           id: doc.id,
-          topic: s.topic,
+          topics: s.topics || (s.topic ? [s.topic] : []),
           trainer: s.trainer,
           date: s.date,
           hours: hrs,

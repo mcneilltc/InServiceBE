@@ -93,7 +93,7 @@ router.post('/', async (req, res) => {
       checkin: checkinData,
       session: {
         id: sessionId,
-        name: sessionData.name || sessionData.topic || 'Training Session',
+        name: sessionData.name || (sessionData.topics && sessionData.topics.join(', ')) || sessionData.topic || 'Training Session',
         date: sessionData.date || new Date().toISOString().split('T')[0],
         trainer: sessionData.trainer || 'Unknown Trainer',
         trainees: sessionData.trainees || [],

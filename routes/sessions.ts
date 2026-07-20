@@ -11,12 +11,13 @@ const STAFF = ['supervisor', 'trainer'];
 // Create a new training session (standalone, not tied to specific employee)
 router.post('/', requireRole(STAFF), async (req, res) => {
   try {
-    const { date, location, startTime, length, topic, trainer, trainees, name } = req.body;
+    const { date, location, startTime, length, topics, trainer, trainees, name } = req.body;
+    const topicsArray = Array.isArray(topics) ? topics : (topics ? [topics] : []);
 
     const missingFields = [];
     if (!date) missingFields.push('date');
     if (!location) missingFields.push('location');
-    if (!topic) missingFields.push('topic');
+    if (topicsArray.length === 0) missingFields.push('topics');
     if (!trainer) missingFields.push('trainer');
 
     if (missingFields.length > 0) {
@@ -29,12 +30,12 @@ router.post('/', requireRole(STAFF), async (req, res) => {
     }
 
     const sessionData = {
-      name: name || topic,
+      name: name || topicsArray.join(', '),
       date,
       location,
       startTime: startTime || '',
       length: typeof length === 'number' ? length : parseInt(length, 10) || 0,
-      topic,
+      topics: topicsArray,
       trainer: Array.isArray(trainer) ? trainer : [trainer],
       trainees: Array.isArray(trainees) ? trainees : [],
       status: 'scheduled',
@@ -170,7 +171,7 @@ router.post('/:sessionId/close', requireRole(STAFF), async (req, res) => {
       const trainingSessionData = {
         date: sessionData.date,
         location: checkin.location || sessionData.location,
-        topic: sessionData.topic,
+        topics: sessionData.topics || (sessionData.topic ? [sessionData.topic] : []),
         trainer: sessionData.trainer,
         length: durationHours,
         status: 'completed',
@@ -204,7 +205,7 @@ router.post('/:sessionId/close', requireRole(STAFF), async (req, res) => {
       await trainerRef.collection('trainingSessionsLed').add({
         date: sessionData.date,
         location: sessionData.location,
-        topic: sessionData.topic,
+        topics: sessionData.topics || (sessionData.topic ? [sessionData.topic] : []),
         length: trainerDurationHours,
         employeeCount: employeesCredited,
         sourceSessionId: sessionId,

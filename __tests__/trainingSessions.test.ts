@@ -55,7 +55,7 @@ describe('Training Sessions API', () => {
           date: '2025-01-01',
           location: 'Test Location',
           length: 60,
-          topic: 'Zod Validation',
+          topics: ['Zod Validation'],
           trainer: 'trainer-1',
           trainees: []
         });
@@ -89,7 +89,7 @@ describe('Training Sessions API', () => {
           date: '2025-01-02',
           location: 'MCAC',
           length: 90,
-          topic: 'Active Session Sync',
+          topics: ['Active Session Sync'],
           trainer: 'trainer-1',
           trainees: []
         });

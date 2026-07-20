@@ -2,8 +2,33 @@ import { Request, Response, NextFunction } from 'express';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { db } from '../config/firebase';
 import moment from 'moment';
+import sharp from 'sharp';
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
+
+// Vision-model token cost scales with image dimensions, and phone photos of a
+// sign-in sheet are typically far higher resolution than OCR needs. Downscaling
+// before the Gemini call cuts input tokens (and therefore cost) with no loss of
+// legibility for printed/handwritten text on a standard sheet.
+const MAX_DIMENSION = 1600;
+const JPEG_QUALITY = 85;
+
+async function prepareImageForOcr(buffer: Buffer, mimeType: string): Promise<{ data: string; mimeType: string }> {
+  try {
+    const resized = await sharp(buffer)
+      .rotate() // respect EXIF orientation before resizing
+      .resize({ width: MAX_DIMENSION, height: MAX_DIMENSION, fit: 'inside', withoutEnlargement: true })
+      .jpeg({ quality: JPEG_QUALITY })
+      .toBuffer();
+    return { data: resized.toString('base64'), mimeType: 'image/jpeg' };
+  } catch (error) {
+    // sharp's HEIC/HEIF decode support varies by build (Apple's HEVC-based
+    // HEIC in particular isn't always included) — fall back to the original
+    // image rather than fail the upload if resizing doesn't work for it.
+    console.warn('Image resize before OCR failed, sending original:', (error as Error).message);
+    return { data: buffer.toString('base64'), mimeType };
+  }
+}
 
 const EXTRACTION_PROMPT = `You are analyzing a photo of a training/inservice sign-in sheet.
 Extract ALL of the following information and return it as valid JSON only (no markdown, no explanation):
@@ -16,7 +41,7 @@ Extract ALL of the following information and return it as valid JSON only (no ma
   "endTime": "Overall end time of the training for the whole sheet, in HH:MM format (24h), or null if not found",
   "location": "Location/site name, or null if not found",
   "employees": [
-    { "name": "Full name of attendee", "email": "email if visible, else null" }
+    { "name": "Full name of attendee", "site": "Location/site name", "email": "email if visible, else null" }
   ]
 }
 
@@ -36,12 +61,13 @@ export const extractFromSheet = async (req: Request, res: Response, next: NextFu
       return res.status(500).json({ error: { message: 'GEMINI_API_KEY is not configured on the server' } });
     }
 
-    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+    const model = genAI.getGenerativeModel({ model: 'gemini-flash-latest' });
 
+    const { data: imageData, mimeType: imageMimeType } = await prepareImageForOcr(req.file.buffer, req.file.mimetype);
     const imagePart = {
       inlineData: {
-        data: req.file.buffer.toString('base64'),
-        mimeType: req.file.mimetype as 'image/jpeg' | 'image/png' | 'image/webp' | 'image/heic' | 'image/heif',
+        data: imageData,
+        mimeType: imageMimeType,
       },
     };
 
