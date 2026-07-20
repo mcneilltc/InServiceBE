@@ -101,7 +101,13 @@ router.get('/employee-hours/:employeeId/yearly', async (req, res) => {
 router.get('/stats', async (req, res) => {
   try {
     const { workSite, period, startDate, endDate } = req.query;
-    
+
+    // workSite may be a single site, a comma-separated list of sites (for a
+    // supervisor scoped to multiple locations), or absent/'all' for everything.
+    const requestedSites: string[] | null = workSite && workSite !== 'all'
+      ? String(workSite).split(',').map((s) => s.trim()).filter(Boolean)
+      : null;
+
     // Calculate date range based on period
     let dateStart, dateEnd;
     const now = new Date();
@@ -134,8 +140,10 @@ router.get('/stats', async (req, res) => {
 
     // Get all check-ins
     let checkinsQuery = db.collection('checkins');
-    if (workSite) {
-      checkinsQuery = checkinsQuery.where('location', '==', workSite);
+    if (requestedSites && requestedSites.length === 1) {
+      checkinsQuery = checkinsQuery.where('location', '==', requestedSites[0]);
+    } else if (requestedSites && requestedSites.length > 1) {
+      checkinsQuery = checkinsQuery.where('location', 'in', requestedSites);
     }
 
     const checkinsSnapshot = await checkinsQuery.get();
@@ -157,7 +165,7 @@ router.get('/stats', async (req, res) => {
       const session = doc.data();
       const sessionDate = new Date(session.date);
       if (sessionDate >= dateStart && sessionDate <= dateEnd) {
-        if (!workSite || session.location === workSite) {
+        if (!requestedSites || requestedSites.includes(session.location)) {
           sessions.push({ id: doc.id, ...session });
         }
       }
@@ -175,21 +183,19 @@ router.get('/stats', async (req, res) => {
     for (const employeeDoc of allEmployeesSnapshot.docs) {
       const employeeData = employeeDoc.data();
       
-      // Calculate total hours from training sessions (length is in minutes)
+      // Calculate total hours from training sessions (length is stored in hours,
+      // consistent with reports.ts, employeeSelfServiceController, and the session close-out pipeline)
       const sessionsSnapshot = await employeeDoc.ref.collection('trainingSessions').get();
-      let totalMinutes = 0;
+      let totalHours = 0;
       sessionsSnapshot.forEach(sessionDoc => {
         const session = sessionDoc.data();
         const sessionDate = new Date(session.date);
         if (sessionDate >= dateStart && sessionDate <= dateEnd) {
-          totalMinutes += parseFloat(session.length) || 0;
+          totalHours += parseFloat(session.length) || 0;
         }
       });
-      
-      // Convert minutes to hours (required hours is 4 hours = 240 minutes)
+
       const requiredHours = 4;
-      const requiredMinutes = requiredHours * 60;
-      const totalHours = totalMinutes / 60;
       const hoursLeft = Math.max(0, requiredHours - totalHours);
       
       allEmployees.push({ 
@@ -201,11 +207,11 @@ router.get('/stats', async (req, res) => {
       });
     }
 
-    // Filter by workSite if specified
+    // Filter by workSite if specified — employees store their site(s) in `locations` (array)
     let filteredEmployees = allEmployees;
-    if (workSite && workSite !== 'all') {
-      filteredEmployees = allEmployees.filter(emp => 
-        emp.location === workSite || emp.workSite === workSite
+    if (requestedSites) {
+      filteredEmployees = allEmployees.filter((emp: any) =>
+        (emp.locations || []).some((loc: string) => requestedSites.includes(loc))
       );
     }
 
@@ -262,7 +268,7 @@ router.get('/stats', async (req, res) => {
         id: emp.id,
         name: emp.name,
         email: emp.email,
-        location: emp.location || emp.workSite || 'Unknown',
+        location: (emp.locations && emp.locations.join(', ')) || 'Unknown',
         totalHours: emp.totalHours || 0,
         requiredHours: emp.requiredHours || 4,
         hoursLeft: emp.hoursLeft || 0,

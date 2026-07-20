@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { db } from '../config/firebase';
+import moment from 'moment';
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
 
@@ -11,8 +12,8 @@ Extract ALL of the following information and return it as valid JSON only (no ma
   "trainer": "Name of the instructor/trainer leading the session",
   "topic": "The training topic or subject",
   "date": "Date of the session in YYYY-MM-DD format",
-  "startTime": "Start time in HH:MM format (24h), or null if not found",
-  "length": "Duration in hours as a number (e.g. 1.5), or null if not found",
+  "startTime": "Overall start time of the training for the whole sheet, in HH:MM format (24h), or null if not found",
+  "endTime": "Overall end time of the training for the whole sheet, in HH:MM format (24h), or null if not found",
   "location": "Location/site name, or null if not found",
   "employees": [
     { "name": "Full name of attendee", "email": "email if visible, else null" }
@@ -20,6 +21,7 @@ Extract ALL of the following information and return it as valid JSON only (no ma
 }
 
 Rules:
+- startTime and endTime describe the training session as a whole (from the top of the sheet), not each individual attendee's own sign-in/out times
 - employees must be an array of every attendee you can read from the sheet
 - If a field is illegible or absent, use null
 - Return ONLY the JSON object, nothing else`;
@@ -56,6 +58,16 @@ export const extractFromSheet = async (req: Request, res: Response, next: NextFu
       return res.status(422).json({
         error: { message: 'Could not parse OCR response as JSON', raw: text }
       });
+    }
+
+    // Compute overall session duration (hours) from start/end time, if both are present
+    if (extracted.startTime && extracted.endTime) {
+      const start = moment(extracted.startTime, ['HH:mm', 'h:mm A']);
+      let end = moment(extracted.endTime, ['HH:mm', 'h:mm A']);
+      if (start.isValid() && end.isValid()) {
+        if (end.isBefore(start)) end = end.add(1, 'day'); // handle sessions that cross midnight
+        extracted.length = Math.round(end.diff(start, 'minutes') / 60 * 100) / 100;
+      }
     }
 
     // Attempt to fuzzy-match employees and trainer against existing DB records

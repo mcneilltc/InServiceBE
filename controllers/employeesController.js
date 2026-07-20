@@ -7,14 +7,44 @@ const employeeSchema = z.object({
     name: z.string({
       required_error: "Employee name is required",
     }).min(1, "Name cannot be empty"),
-    teamId: z.string().optional() // Make optional if it's not strictly required by DB, adjust if needed
+    email: z.string().optional(),
+    position: z.string().optional(),
+    hireDate: z.string().optional(),
+    locations: z.array(z.string()).optional(),
+    isActive: z.boolean().optional(),
+    depth: z.string().nullable().optional(),
+    certificationExpiration: z.string().nullable().optional(),
+    hasSlideCert: z.boolean().optional(),
+    hasSwimCert: z.boolean().optional(),
+    isEliteSupervisor: z.boolean().optional(),
+    badgeNumber: z.string().optional(),
+    firstName: z.string().optional(),
+    lastName: z.string().optional(),
+    teamId: z.string().optional(), // Make optional if it's not strictly required by DB, adjust if needed
+    isSupervisor: z.boolean().optional(),
+    supervisorScope: z.enum(['all', 'locations']).optional(),
   })
 });
 
 const updateEmployeeSchema = z.object({
   body: z.object({
     name: z.string().min(1, "Name cannot be empty").optional(),
-    teamId: z.string().optional()
+    email: z.string().optional(),
+    position: z.string().optional(),
+    hireDate: z.string().optional(),
+    locations: z.array(z.string()).optional(),
+    isActive: z.boolean().optional(),
+    depth: z.string().nullable().optional(),
+    certificationExpiration: z.string().nullable().optional(),
+    hasSlideCert: z.boolean().optional(),
+    hasSwimCert: z.boolean().optional(),
+    isEliteSupervisor: z.boolean().optional(),
+    badgeNumber: z.string().optional(),
+    firstName: z.string().optional(),
+    lastName: z.string().optional(),
+    teamId: z.string().optional(),
+    isSupervisor: z.boolean().optional(),
+    supervisorScope: z.enum(['all', 'locations']).optional(),
   })
 });
 
@@ -49,19 +79,40 @@ const getEmployeeById = async (req, res, next) => {
 
 const createEmployee = async (req, res, next) => {
   try {
-    const { name, teamId } = req.body;
-    
+    const {
+      name, email, position, hireDate, locations, isActive,
+      depth, certificationExpiration, hasSlideCert, hasSwimCert,
+      isEliteSupervisor, badgeNumber, firstName, lastName, teamId,
+      isSupervisor, supervisorScope
+    } = req.body;
+
     const employeeData = {
       name,
+      email: email || '',
+      position: position || '',
+      hireDate: hireDate || null,
+      locations: Array.isArray(locations) ? locations : [],
+      isActive: isActive !== undefined ? isActive : true,
+      archivedAt: null,
+      depth: depth || null,
+      certificationExpiration: certificationExpiration || null,
+      hasSlideCert: !!hasSlideCert,
+      hasSwimCert: !!hasSwimCert,
+      isEliteSupervisor: !!isEliteSupervisor,
+      badgeNumber: badgeNumber || null,
+      firstName: firstName || null,
+      lastName: lastName || null,
       teamId: teamId || null,
+      isSupervisor: !!isSupervisor,
+      supervisorScope: isSupervisor ? (supervisorScope || 'locations') : null,
       totalHours: 0,
       createdAt: new Date().toISOString()
     };
 
     const docRef = await db.collection('employees').add(employeeData);
-    res.status(201).json({ 
-      message: 'Employee added', 
-      id: docRef.id, 
+    res.status(201).json({
+      message: 'Employee added',
+      id: docRef.id,
       employee: { id: docRef.id, ...employeeData }
     });
   } catch (error) {
@@ -72,7 +123,12 @@ const createEmployee = async (req, res, next) => {
 const updateEmployee = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { name, teamId } = req.body;
+    const {
+      name, email, position, hireDate, locations, isActive,
+      depth, certificationExpiration, hasSlideCert, hasSwimCert,
+      isEliteSupervisor, badgeNumber, firstName, lastName, teamId,
+      isSupervisor, supervisorScope
+    } = req.body;
 
     const docRef = db.collection('employees').doc(id);
     const doc = await docRef.get();
@@ -83,13 +139,35 @@ const updateEmployee = async (req, res, next) => {
 
     const updateData = {};
     if (name !== undefined) updateData.name = name;
+    if (email !== undefined) updateData.email = email;
+    if (position !== undefined) updateData.position = position;
+    if (hireDate !== undefined) updateData.hireDate = hireDate;
+    if (locations !== undefined) updateData.locations = locations;
+    if (isActive !== undefined) {
+      updateData.isActive = isActive;
+      updateData.archivedAt = isActive ? null : new Date().toISOString();
+    }
+    if (depth !== undefined) updateData.depth = depth;
+    if (certificationExpiration !== undefined) updateData.certificationExpiration = certificationExpiration;
+    if (hasSlideCert !== undefined) updateData.hasSlideCert = hasSlideCert;
+    if (hasSwimCert !== undefined) updateData.hasSwimCert = hasSwimCert;
+    if (isEliteSupervisor !== undefined) updateData.isEliteSupervisor = isEliteSupervisor;
+    if (badgeNumber !== undefined) updateData.badgeNumber = badgeNumber;
+    if (firstName !== undefined) updateData.firstName = firstName;
+    if (lastName !== undefined) updateData.lastName = lastName;
     if (teamId !== undefined) updateData.teamId = teamId;
+    if (isSupervisor !== undefined) {
+      updateData.isSupervisor = isSupervisor;
+      updateData.supervisorScope = isSupervisor ? (supervisorScope || 'locations') : null;
+    } else if (supervisorScope !== undefined) {
+      updateData.supervisorScope = supervisorScope;
+    }
     updateData.updatedAt = new Date().toISOString();
 
     await docRef.update(updateData);
-    res.json({ 
-      message: 'Employee updated', 
-      id, 
+    res.json({
+      message: 'Employee updated',
+      id,
       employee: { id, ...doc.data(), ...updateData }
     });
   } catch (error) {
@@ -107,14 +185,13 @@ const deleteEmployee = async (req, res, next) => {
       return res.status(404).json({ message: 'Employee not found' });
     }
 
-    // Delete all training sessions for this employee
-    const sessionsSnapshot = await docRef.collection('trainingSessions').get();
-    const deletePromises = sessionsSnapshot.docs.map(doc => doc.ref.delete());
-    await Promise.all(deletePromises);
+    // Soft-archive instead of deleting, to preserve training session history
+    await docRef.update({
+      isActive: false,
+      archivedAt: new Date().toISOString(),
+    });
 
-    // Delete the employee
-    await docRef.delete();
-    res.json({ message: 'Employee deleted' });
+    res.json({ message: 'Employee archived' });
   } catch (error) {
     next(error);
   }

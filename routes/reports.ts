@@ -8,12 +8,19 @@ router.get('/', async (req, res) => {
   try {
     const { name, workSite, startDate, endDate } = req.query;
 
+    // workSite may be a single site, a comma-separated list (for a supervisor scoped to
+    // multiple locations), or absent/'all' for everything.
+    const requestedSites: string[] | null = workSite && workSite !== 'all'
+      ? String(workSite).split(',').map((s: string) => s.trim()).filter(Boolean)
+      : null;
+
     // Get all check-ins
     let checkinsQuery = db.collection('checkins');
 
-    // Apply filters
-    if (workSite) {
-      checkinsQuery = checkinsQuery.where('location', '==', workSite);
+    if (requestedSites && requestedSites.length === 1) {
+      checkinsQuery = checkinsQuery.where('location', '==', requestedSites[0]);
+    } else if (requestedSites && requestedSites.length > 1) {
+      checkinsQuery = checkinsQuery.where('location', 'in', requestedSites);
     }
 
     const checkinsSnapshot = await checkinsQuery.get();
@@ -58,16 +65,17 @@ router.get('/', async (req, res) => {
       employeeHours[employeeDoc.id] = {
         name: employeeData.name,
         totalHours: totalHours,
-        workSite: employeeData.location || 'Unknown'
+        workSite: (employeeData.locations && employeeData.locations.join(', ')) || 'Unknown'
       };
     }
 
     // Combine check-in data with employee hours
     const reportData = checkins.map(checkin => {
-      // Try to find matching employee by email or name
-      const employee: any = Object.values(employeeHours).find(
-        (emp: any) => emp.name === checkin.name || checkin.email
-      );
+      // Checkins created since identity resolution was added carry a real employeeId;
+      // fall back to a name match for older records that predate it.
+      const employee: any = checkin.employeeId
+        ? employeeHours[checkin.employeeId]
+        : Object.values(employeeHours).find((emp: any) => emp.name === checkin.name);
 
       return {
         name: checkin.name,

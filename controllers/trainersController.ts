@@ -60,6 +60,7 @@ export const createTrainer = async (req: Request, res: Response, next: NextFunct
       email: email.trim(),
       phone: phone?.trim() || '',
       archived: false,
+      totalHoursLed: 0,
       createdAt: new Date().toISOString(),
     };
     const docRef = await db.collection('trainers').add(trainerData);

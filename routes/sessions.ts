@@ -2,6 +2,8 @@ export {};
 const express = require('express');
 const router = express.Router();
 const { db } = require('../config/firebase');
+const admin = require('firebase-admin');
+const moment = require('moment');
 
 // Create a new training session (standalone, not tied to specific employee)
 router.post('/', async (req, res) => {
@@ -104,6 +106,131 @@ router.put('/:sessionId', async (req, res) => {
   } catch (error) {
     console.error('Error updating session:', error);
     res.status(500).json({ error: 'Failed to update session' });
+  }
+});
+
+// Close out a session: credits every checked-in employee with hours (from their
+// individual check-in time to the moment of close-out), and credits every trainer
+// on the session with hours led (from the session's effective start to close-out).
+router.post('/:sessionId/close', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const sessionRef = db.collection('sessions').doc(sessionId);
+    const sessionDoc = await sessionRef.get();
+
+    if (!sessionDoc.exists) {
+      return res.status(404).json({ message: 'Session not found' });
+    }
+
+    const sessionData = sessionDoc.data();
+    if (sessionData.status === 'completed') {
+      return res.status(400).json({ message: 'This session has already been closed out.' });
+    }
+
+    const checkinsSnap = await db.collection('checkins').where('sessionId', '==', sessionId).get();
+    const checkins = checkinsSnap.docs.map((d: any) => ({ id: d.id, ...d.data() }));
+
+    const closeOutTime = new Date();
+
+    // Effective session start = earliest check-in, else the scheduled date/startTime, else close-out time
+    let effectiveStart = closeOutTime;
+    const checkinTimes = checkins
+      .map((c: any) => (c.checkinTime ? new Date(c.checkinTime) : null))
+      .filter((d: Date | null): d is Date => !!d && !isNaN(d.getTime()));
+
+    if (checkinTimes.length > 0) {
+      effectiveStart = new Date(Math.min(...checkinTimes.map(d => d.getTime())));
+    } else if (sessionData.date) {
+      const parsed = moment(`${sessionData.date} ${sessionData.startTime || ''}`.trim(), ['YYYY-MM-DD hh:mm A', 'YYYY-MM-DD HH:mm', 'YYYY-MM-DD']);
+      if (parsed.isValid()) {
+        effectiveStart = parsed.toDate();
+      }
+    }
+
+    const hoursBetween = (start: Date, end: Date) => {
+      const hrs = (end.getTime() - start.getTime()) / (1000 * 60 * 60);
+      return Math.max(0, Math.round(hrs * 100) / 100);
+    };
+
+    // Credit each checked-in employee
+    let employeesCredited = 0;
+    let totalEmployeeHours = 0;
+    for (const checkin of checkins) {
+      if (!checkin.employeeId) continue;
+      const checkinTime = checkin.checkinTime ? new Date(checkin.checkinTime) : effectiveStart;
+      const durationHours = hoursBetween(checkinTime, closeOutTime);
+
+      const employeeRef = db.collection('employees').doc(checkin.employeeId);
+      const trainingSessionData = {
+        date: sessionData.date,
+        location: checkin.location || sessionData.location,
+        topic: sessionData.topic,
+        trainer: sessionData.trainer,
+        length: durationHours,
+        status: 'completed',
+        sourceSessionId: sessionId,
+        sourceCheckinId: checkin.id,
+        createdAt: new Date().toISOString(),
+      };
+
+      await employeeRef.collection('trainingSessions').add(trainingSessionData);
+      await employeeRef.update({
+        totalHours: admin.firestore.FieldValue.increment(durationHours),
+        updatedAt: new Date().toISOString(),
+      });
+
+      employeesCredited++;
+      totalEmployeeHours += durationHours;
+    }
+
+    // Credit each trainer on the session
+    const trainerIds: string[] = Array.isArray(sessionData.trainer)
+      ? sessionData.trainer
+      : (sessionData.trainer ? [sessionData.trainer] : []);
+    const trainerDurationHours = hoursBetween(effectiveStart, closeOutTime);
+
+    let trainersCredited = 0;
+    for (const trainerId of trainerIds) {
+      const trainerRef = db.collection('trainers').doc(trainerId);
+      const trainerDoc = await trainerRef.get();
+      if (!trainerDoc.exists) continue;
+
+      await trainerRef.collection('trainingSessionsLed').add({
+        date: sessionData.date,
+        location: sessionData.location,
+        topic: sessionData.topic,
+        length: trainerDurationHours,
+        employeeCount: employeesCredited,
+        sourceSessionId: sessionId,
+        createdAt: new Date().toISOString(),
+      });
+      await trainerRef.update({
+        totalHoursLed: admin.firestore.FieldValue.increment(trainerDurationHours),
+        updatedAt: new Date().toISOString(),
+      });
+
+      trainersCredited++;
+    }
+
+    await sessionRef.update({
+      status: 'completed',
+      closedAt: closeOutTime.toISOString(),
+      effectiveStartTime: effectiveStart.toISOString(),
+      creditsGranted: true,
+      employeesCredited,
+      updatedAt: new Date().toISOString(),
+    });
+
+    res.json({
+      message: 'Session closed out successfully',
+      employeesCredited,
+      totalEmployeeHours: Math.round(totalEmployeeHours * 100) / 100,
+      trainersCredited,
+      trainerDurationHours,
+    });
+  } catch (error) {
+    console.error('Error closing out session:', error);
+    res.status(500).json({ error: 'Failed to close out session' });
   }
 });
 
