@@ -4,9 +4,12 @@ const router = express.Router();
 const { db } = require('../config/firebase');
 const admin = require('firebase-admin');
 const moment = require('moment');
+const { requireRole } = require('../middleware/requireRole');
+
+const STAFF = ['supervisor', 'trainer'];
 
 // Create a new training session (standalone, not tied to specific employee)
-router.post('/', async (req, res) => {
+router.post('/', requireRole(STAFF), async (req, res) => {
   try {
     const { date, location, startTime, length, topic, trainer, trainees, name } = req.body;
 
@@ -52,7 +55,10 @@ router.post('/', async (req, res) => {
   }
 });
 
-// Get a specific session by ID
+// Get a specific session by ID — stays public: the QR check-in page
+// (src/pages/checkin/[sessionId].js) fetches this before the visitor has
+// identified themselves at all. Only exposes session metadata (topic/date/
+// location/trainer ids), no employee PII.
 router.get('/:sessionId', async (req, res) => {
   try {
     const { sessionId } = req.params;
@@ -70,7 +76,7 @@ router.get('/:sessionId', async (req, res) => {
 });
 
 // Update a session (e.g., add trainees manually)
-router.put('/:sessionId', async (req, res) => {
+router.put('/:sessionId', requireRole(STAFF), async (req, res) => {
   try {
     const { sessionId } = req.params;
     const updateData = req.body;
@@ -112,7 +118,7 @@ router.put('/:sessionId', async (req, res) => {
 // Close out a session: credits every checked-in employee with hours (from their
 // individual check-in time to the moment of close-out), and credits every trainer
 // on the session with hours led (from the session's effective start to close-out).
-router.post('/:sessionId/close', async (req, res) => {
+router.post('/:sessionId/close', requireRole(STAFF), async (req, res) => {
   try {
     const { sessionId } = req.params;
     const sessionRef = db.collection('sessions').doc(sessionId);
@@ -235,7 +241,7 @@ router.post('/:sessionId/close', async (req, res) => {
 });
 
 // Get all sessions
-router.get('/', async (req, res) => {
+router.get('/', requireRole(STAFF), async (req, res) => {
   try {
     const sessionsSnapshot = await db.collection('sessions').get();
     const sessions = [];

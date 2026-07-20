@@ -1,6 +1,7 @@
 import request from 'supertest';
 import app from '../app';
 import { db } from '../config/firebase';
+import { authCookie } from './testHelpers';
 
 // Mock Firebase
 jest.mock('../config/firebase', () => ({
@@ -19,7 +20,7 @@ describe('Training Sessions API', () => {
       const mockGet = jest.fn().mockResolvedValue({ forEach: jest.fn() });
       (db.collection as jest.Mock).mockReturnValue({ get: mockGet });
 
-      const response = await request(app).get('/api/sessions');
+      const response = await request(app).get('/api/sessions').set('Cookie', authCookie());
       expect(response.status).toBe(200);
       expect(response.body).toEqual([]);
     });
@@ -29,6 +30,7 @@ describe('Training Sessions API', () => {
     it('should return 400 when session body is invalid (Zod validation)', async () => {
       const response = await request(app)
         .post('/api/sessions')
+        .set('Cookie', authCookie())
         .send({});
 
       expect(response.status).toBe(400);
@@ -48,6 +50,7 @@ describe('Training Sessions API', () => {
 
       const response = await request(app)
         .post('/api/sessions')
+        .set('Cookie', authCookie())
         .send({
           date: '2025-01-01',
           location: 'Test Location',
@@ -81,6 +84,7 @@ describe('Training Sessions API', () => {
 
       const response = await request(app)
         .post('/api/training-sessions')
+        .set('Cookie', authCookie())
         .send({
           date: '2025-01-02',
           location: 'MCAC',
@@ -108,6 +112,7 @@ describe('Training Sessions API', () => {
 
       const response = await request(app)
         .put('/api/sessions/session-123')
+        .set('Cookie', authCookie())
         .send({
           trainees: ['employee-1'],
           trainer: ['trainer-1', 'trainer-2']

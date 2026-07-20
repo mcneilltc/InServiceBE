@@ -1,13 +1,25 @@
 
+// Load .env before anything else — several modules (config/firebase.ts,
+// middleware/requireRole.ts, routes/auth.ts) read process.env at import time,
+// so this must run first regardless of require/import order elsewhere.
+require('dotenv').config();
+
 const express = require('express');
 const bodyParser = require('body-parser');
 const cors = require('cors');
+const cookieParser = require('cookie-parser');
 const errorHandler = require('./middleware/errorHandler');
 
 const app = express();
 const port = 5001; // Or any other port
 
-app.use(cors());
+// credentials:true + an explicit origin is required for the httpOnly session
+// cookie to ride along on cross-origin requests from the frontend.
+app.use(cors({
+  origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+  credentials: true,
+}));
+app.use(cookieParser());
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true })); // Parse URL-encoded bodies
 
@@ -22,54 +34,28 @@ import sessionRoutes from './routes/sessions';
 
 import reportRoutes from './routes/reports';
 import adminRoutes from './routes/admin';
+import authRoutes from './routes/auth';
 import ocrRoutes from './routes/ocr';
 import complianceRoutes from './routes/compliance';
 import employeeSelfServiceRoutes from './routes/employeeSelfService';
+const { requireRole } = require('./middleware/requireRole');
 
+const SUPERVISOR = requireRole(['supervisor']);
+const STAFF = requireRole(['supervisor', 'trainer']);
+
+app.use('/api/auth', authRoutes);
 app.use('/api/employees', employeeRoutes);
 app.use('/api/training-sessions', trainingSessionRoutes);
 app.use('/api/training-topics', trainingTopicRoutes);
 app.use('/api/trainers', trainerRoutes);
-app.use('/api/dashboard', dashboardRoutes);
+app.use('/api/dashboard', SUPERVISOR, dashboardRoutes);
 app.use('/api/checkin', checkinRoutes);
 app.use('/api/sessions', sessionRoutes);
-app.use('/api/reports', reportRoutes);
+app.use('/api/reports', STAFF, reportRoutes);
 app.use('/api/admin', adminRoutes);
-app.use('/api/ocr', ocrRoutes);
-app.use('/api/compliance', complianceRoutes);
+app.use('/api/ocr', STAFF, ocrRoutes);
+app.use('/api/compliance', SUPERVISOR, complianceRoutes);
 app.use('/api/employee', employeeSelfServiceRoutes);
-
-const { verifyGoogleToken, verifyMicrosoftToken } = require('./utils');
-
-// Google Sign-In verification route
-app.post('/api/google-signin', async (req, res) => {
-  try {
-    const { idToken } = req.body;
-    if (!idToken) {
-      return res.status(400).json({ message: 'ID token is required' });
-    }
-
-    const userData = await verifyGoogleToken(idToken);
-    res.json({ message: 'Google Sign-In successful', user: userData });
-  } catch (error) {
-    res.status(401).json({ error: 'Google Sign-In failed', details: error.message });
-  }
-});
-
-// Microsoft Sign-In verification route
-app.post('/api/microsoft-signin', async (req, res) => {
-  try {
-    const { accessToken } = req.body;
-    if (!accessToken) {
-      return res.status(400).json({ message: 'Access token is required' });
-    }
-
-    const userData = await verifyMicrosoftToken(accessToken);
-    res.json({ message: 'Microsoft Sign-In successful', user: userData });
-  } catch (error) {
-    res.status(401).json({ error: 'Microsoft Sign-In failed', details: error.message });
-  }
-});
 
 app.get('/', (req, res) => {
   res.send('Training Management Application Backend is running!');

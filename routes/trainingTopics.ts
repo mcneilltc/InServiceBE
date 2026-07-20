@@ -1,5 +1,6 @@
 import express from 'express';
 import validate from '../middleware/validate';
+const { requireRole } = require('../middleware/requireRole');
 import {
   topicSchema,
   updateTopicSchema,
@@ -12,10 +13,13 @@ import {
 
 const router = express.Router();
 
-router.get('/', getAllTopics);
-router.get('/:id', getTopicById);
-router.post('/', validate(topicSchema), createTopic);
-router.put('/:id', validate(updateTopicSchema), updateTopic);
-router.delete('/:id', deleteTopic);
+// Reads — supervisors and trainers both need the topic list (session pickers).
+router.get('/', requireRole(['supervisor', 'trainer']), getAllTopics);
+router.get('/:id', requireRole(['supervisor', 'trainer']), getTopicById);
+
+// Writes — supervisor only (Manage Topics).
+router.post('/', requireRole(['supervisor']), validate(topicSchema), createTopic);
+router.put('/:id', requireRole(['supervisor']), validate(updateTopicSchema), updateTopic);
+router.delete('/:id', requireRole(['supervisor']), deleteTopic);
 
 export default router;

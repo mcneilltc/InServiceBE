@@ -2,6 +2,7 @@ export {};
 const express = require('express');
 const router = express.Router();
 const { db } = require('../config/firebase');
+const { requireRole } = require('../middleware/requireRole');
 import { selfCheckin } from '../controllers/checkinController';
 
 // POST /api/checkin
@@ -109,8 +110,8 @@ router.post('/self', (req, res, next) => {
   return (selfCheckin as any)(req, res, next);
 });
 
-// Get all check-ins
-router.get('/', async (req, res) => {
+// Get all check-ins — supervisor only (manager dashboard)
+router.get('/', requireRole(['supervisor']), async (req, res) => {
   try {
     const checkinsSnapshot = await db.collection('checkins').get();
     const checkins = [];

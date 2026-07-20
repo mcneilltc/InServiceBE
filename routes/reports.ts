@@ -2,25 +2,35 @@ export {};
 const express = require('express');
 const router = express.Router();
 const { db } = require('../config/firebase');
+const { clampSitesToScope } = require('../services/authService');
 
 // Get report data with filters
-router.get('/', async (req, res) => {
+router.get('/', async (req: any, res) => {
   try {
     const { name, workSite, startDate, endDate } = req.query;
 
     // workSite may be a single site, a comma-separated list (for a supervisor scoped to
     // multiple locations), or absent/'all' for everything.
-    const requestedSites: string[] | null = workSite && workSite !== 'all'
+    const clientRequestedSites: string[] | null = workSite && workSite !== 'all'
       ? String(workSite).split(',').map((s: string) => s.trim()).filter(Boolean)
       : null;
+    // Clamp to the verified session's scope — never trust the client's own claim.
+    const requestedSites = clampSitesToScope(req.user, clientRequestedSites);
 
-    // Get all check-ins
+    // Get all check-ins.
+    // requestedSites === [] means the clamp reduced a scoped supervisor's
+    // request to nothing they're allowed to see — that must return no rows,
+    // not fall through to "no filter" the way a naive length check would.
     let checkinsQuery = db.collection('checkins');
 
-    if (requestedSites && requestedSites.length === 1) {
-      checkinsQuery = checkinsQuery.where('location', '==', requestedSites[0]);
-    } else if (requestedSites && requestedSites.length > 1) {
-      checkinsQuery = checkinsQuery.where('location', 'in', requestedSites);
+    if (requestedSites) {
+      if (requestedSites.length === 0) {
+        checkinsQuery = checkinsQuery.where('location', '==', '__no_access__');
+      } else if (requestedSites.length === 1) {
+        checkinsQuery = checkinsQuery.where('location', '==', requestedSites[0]);
+      } else {
+        checkinsQuery = checkinsQuery.where('location', 'in', requestedSites);
+      }
     }
 
     const checkinsSnapshot = await checkinsQuery.get();

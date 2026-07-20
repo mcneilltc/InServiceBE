@@ -1,6 +1,7 @@
 import request from 'supertest';
 import app from '../app';
 import { db } from '../config/firebase';
+import { authCookie } from './testHelpers';
 
 // Mock Firebase
 jest.mock('../config/firebase', () => ({
@@ -19,7 +20,7 @@ describe('Training Topics API', () => {
       const mockGet = jest.fn().mockResolvedValue({ forEach: jest.fn() });
       (db.collection as jest.Mock).mockReturnValue({ get: mockGet });
 
-      const response = await request(app).get('/api/training-topics');
+      const response = await request(app).get('/api/training-topics').set('Cookie', authCookie());
       expect(response.status).toBe(200);
       expect(response.body).toEqual([]);
     });
@@ -29,7 +30,7 @@ describe('Training Topics API', () => {
       const mockGet = jest.fn().mockResolvedValue({ forEach: (cb: any) => mockDocs.forEach(cb) });
       (db.collection as jest.Mock).mockReturnValue({ get: mockGet });
 
-      const response = await request(app).get('/api/training-topics');
+      const response = await request(app).get('/api/training-topics').set('Cookie', authCookie());
       expect(response.status).toBe(200);
       expect(response.body).toEqual([
         { id: 'test-id', name: 'JavaScript Basics' }
@@ -44,6 +45,7 @@ describe('Training Topics API', () => {
 
       const response = await request(app)
         .post('/api/training-topics')
+        .set('Cookie', authCookie())
         .send({ topicName: 'JavaScript Basics' });
 
       expect(response.status).toBe(201);
@@ -54,6 +56,7 @@ describe('Training Topics API', () => {
     it('should return 400 when topicName is missing (Zod validation)', async () => {
       const response = await request(app)
         .post('/api/training-topics')
+        .set('Cookie', authCookie())
         .send({});
 
       expect(response.status).toBe(400);

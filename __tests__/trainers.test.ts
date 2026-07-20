@@ -1,6 +1,7 @@
 import request from 'supertest';
 import app from '../app';
 import { db } from '../config/firebase';
+import { authCookie } from './testHelpers';
 
 // Mock Firebase
 jest.mock('../config/firebase', () => ({
@@ -20,7 +21,7 @@ describe('Trainers API', () => {
       const mockWhere = jest.fn().mockReturnValue({ get: mockGet });
       (db.collection as jest.Mock).mockReturnValue({ where: mockWhere, get: mockGet });
 
-      const response = await request(app).get('/api/trainers');
+      const response = await request(app).get('/api/trainers').set('Cookie', authCookie());
       expect(response.status).toBe(200);
       expect(response.body).toEqual([]);
     });
@@ -31,7 +32,7 @@ describe('Trainers API', () => {
       const mockWhere = jest.fn().mockReturnValue({ get: mockGet });
       (db.collection as jest.Mock).mockReturnValue({ where: mockWhere, get: mockGet });
 
-      const response = await request(app).get('/api/trainers');
+      const response = await request(app).get('/api/trainers').set('Cookie', authCookie());
       expect(response.status).toBe(200);
       expect(response.body).toEqual([
         { id: 'test-id', name: 'John Doe', email: 'john@example.com' }
@@ -46,6 +47,7 @@ describe('Trainers API', () => {
 
       const response = await request(app)
         .post('/api/trainers')
+        .set('Cookie', authCookie())
         .send({ name: 'John Doe', email: 'john@test.com' });
 
       expect(response.status).toBe(201);
@@ -57,6 +59,7 @@ describe('Trainers API', () => {
     it('should return 400 when missing required fields (Zod validation)', async () => {
       const response = await request(app)
         .post('/api/trainers')
+        .set('Cookie', authCookie())
         .send({});
 
       expect(response.status).toBe(400);
@@ -71,7 +74,7 @@ describe('Trainers API', () => {
       const mockDoc = jest.fn().mockReturnValue({ get: mockDocGet });
       (db.collection as jest.Mock).mockReturnValue({ doc: mockDoc });
 
-      const response = await request(app).get('/api/trainers/test-id');
+      const response = await request(app).get('/api/trainers/test-id').set('Cookie', authCookie());
       expect(response.status).toBe(200);
       expect(response.body).toEqual({ id: 'test-id', name: 'John Doe' });
     });

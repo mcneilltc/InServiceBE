@@ -2,6 +2,7 @@ export {};
 const request = require('supertest');
 const app = require('../app');
 const { db } = require('../config/firebase');
+const { authCookie } = require('./testHelpers');
 
 describe('Dashboard API', () => {
   beforeEach(async () => {
@@ -14,7 +15,7 @@ describe('Dashboard API', () => {
 
   describe('GET /api/dashboard/training-hours-by-location', () => {
     it('should return empty object when no sessions exist', async () => {
-      const response = await request(app).get('/api/dashboard/training-hours-by-location');
+      const response = await request(app).get('/api/dashboard/training-hours-by-location').set('Cookie', authCookie());
       expect(response.status).toBe(200);
       expect(response.body).toEqual({});
     });
@@ -37,7 +38,7 @@ describe('Dashboard API', () => {
         date: '2024-03-28'
       });
 
-      const response = await request(app).get('/api/dashboard/training-hours-by-location');
+      const response = await request(app).get('/api/dashboard/training-hours-by-location').set('Cookie', authCookie());
       expect(response.status).toBe(200);
       expect(response.body).toEqual({
         'Room 101': 2,
@@ -48,7 +49,7 @@ describe('Dashboard API', () => {
 
   describe('GET /api/dashboard/employee-hours/:employeeId/monthly', () => {
     it('should return 0 hours for non-existent employee', async () => {
-      const response = await request(app).get('/api/dashboard/employee-hours/non-existent/monthly');
+      const response = await request(app).get('/api/dashboard/employee-hours/non-existent/monthly').set('Cookie', authCookie());
       expect(response.status).toBe(200);
       expect(response.body).toEqual({ totalHours: 0 });
     });
@@ -71,6 +72,7 @@ describe('Dashboard API', () => {
 
       const response = await request(app)
         .get(`/api/dashboard/employee-hours/${employeeRef.id}/monthly`)
+        .set('Cookie', authCookie())
         .query({ month: 3, year: 2024 });
 
       expect(response.status).toBe(200);
@@ -80,7 +82,7 @@ describe('Dashboard API', () => {
 
   describe('GET /api/dashboard/employee-hours/:employeeId/yearly', () => {
     it('should return 0 hours for non-existent employee', async () => {
-      const response = await request(app).get('/api/dashboard/employee-hours/non-existent/yearly');
+      const response = await request(app).get('/api/dashboard/employee-hours/non-existent/yearly').set('Cookie', authCookie());
       expect(response.status).toBe(200);
       expect(response.body).toEqual({ totalHours: 0 });
     });
@@ -103,6 +105,7 @@ describe('Dashboard API', () => {
 
       const response = await request(app)
         .get(`/api/dashboard/employee-hours/${employeeRef.id}/yearly`)
+        .set('Cookie', authCookie())
         .query({ year: 2024 });
 
       expect(response.status).toBe(200);
