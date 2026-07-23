@@ -4,13 +4,15 @@ import { z } from 'zod';
 
 export const topicSchema = z.object({
   body: z.object({
-    topicName: z.string().min(1, "Topic name is required")
+    topicName: z.string().min(1, "Topic name is required"),
+    requiresDetail: z.boolean().optional(),
   })
 });
 
 export const updateTopicSchema = z.object({
   body: z.object({
-    topicName: z.string().min(1, "Topic name is required")
+    topicName: z.string().min(1, "Topic name is required"),
+    requiresDetail: z.boolean().optional(),
   })
 });
 
@@ -44,10 +46,11 @@ export const getTopicById = async (req: Request, res: Response, next: NextFuncti
 
 export const createTopic = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { topicName } = req.body;
+    const { topicName, requiresDetail } = req.body;
 
     const topicData = {
       name: topicName,
+      requiresDetail: !!requiresDetail,
       createdAt: new Date().toISOString()
     };
 
@@ -65,7 +68,7 @@ export const createTopic = async (req: Request, res: Response, next: NextFunctio
 export const updateTopic = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { id } = req.params;
-    const { topicName } = req.body;
+    const { topicName, requiresDetail } = req.body;
 
     const docRef = db.collection('trainingTopics').doc(id);
     const doc = await docRef.get();
@@ -76,6 +79,7 @@ export const updateTopic = async (req: Request, res: Response, next: NextFunctio
 
     const updateData = {
       name: topicName,
+      requiresDetail: !!requiresDetail,
       updatedAt: new Date().toISOString()
     };
 

@@ -27,7 +27,6 @@ app.use(bodyParser.urlencoded({ extended: true })); // Parse URL-encoded bodies
 import employeeRoutes from './routes/employees';
 import trainingSessionRoutes from './routes/trainingSessions';
 import trainingTopicRoutes from './routes/trainingTopics';
-import trainerRoutes from './routes/trainers';
 import dashboardRoutes from './routes/dashboard';
 import checkinRoutes from './routes/checkin';
 import sessionRoutes from './routes/sessions';
@@ -48,7 +47,6 @@ app.use('/api/auth', authRoutes);
 app.use('/api/employees', employeeRoutes);
 app.use('/api/training-sessions', trainingSessionRoutes);
 app.use('/api/training-topics', trainingTopicRoutes);
-app.use('/api/trainers', trainerRoutes);
 app.use('/api/dashboard', SUPERVISOR, dashboardRoutes);
 app.use('/api/checkin', checkinRoutes);
 app.use('/api/sessions', sessionRoutes);

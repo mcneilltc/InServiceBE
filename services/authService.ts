@@ -32,18 +32,20 @@ const resolveRole = async (email: string) => {
     };
   }
 
-  const trainersSnapshot = await db.collection('trainers').get();
+  const trainersSnapshot = await db.collection('employees')
+    .where('isTrainer', '==', true)
+    .get();
   const matchedTrainer = trainersSnapshot.docs.find(
-    (doc: any) => (doc.data().email || '').toLowerCase() === emailLower
+    (doc: any) => matchesEmail(doc.data(), emailLower)
   );
 
   if (matchedTrainer) {
-    const trainer = matchedTrainer.data();
+    const employee = matchedTrainer.data();
     return {
       isWhitelisted: true,
       role: 'trainer',
-      name: trainer.name || null,
-      trainerId: matchedTrainer.id,
+      name: employee.name || null,
+      employeeId: matchedTrainer.id,
       supervisorScope: null,
       supervisorLocations: [],
     };

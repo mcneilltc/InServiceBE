@@ -30,15 +30,18 @@ async function prepareImageForOcr(buffer: Buffer, mimeType: string): Promise<{ d
   }
 }
 
-const EXTRACTION_PROMPT = `You are analyzing a photo of a training/inservice sign-in sheet.
-Extract ALL of the following information and return it as valid JSON only (no markdown, no explanation):
+const EXTRACTION_PROMPT = `You are analyzing photos of a training/inservice sign-in packet. The images provided together make up ONE packet and may include two kinds of pages:
+1. Sign-in sheet page(s) — each lists attendees who signed in for the session (name, site/location, sometimes email), plus the overall trainer, date, and start/end time for the session at the top.
+2. A topics-checklist page — lists candidate training topics with a checkbox (or similar mark) next to each. Only topics that are actually checked/marked were covered in this session.
+
+Combine information across ALL provided images as pages of the same packet and return a single JSON object, valid JSON only (no markdown, no explanation):
 
 {
   "trainer": "Name of the instructor/trainer leading the session",
-  "topic": "The training topic or subject",
+  "topics": ["Each training topic that is checked/marked on the topics-checklist page"],
   "date": "Date of the session in YYYY-MM-DD format",
-  "startTime": "Overall start time of the training for the whole sheet, in HH:MM format (24h), or null if not found",
-  "endTime": "Overall end time of the training for the whole sheet, in HH:MM format (24h), or null if not found",
+  "startTime": "Overall start time of the training for the whole session, in HH:MM format (24h), or null if not found",
+  "endTime": "Overall end time of the training for the whole session, in HH:MM format (24h), or null if not found",
   "location": "Location/site name, or null if not found",
   "employees": [
     { "name": "Full name of attendee", "site": "Location/site name", "email": "email if visible, else null" }
@@ -46,15 +49,17 @@ Extract ALL of the following information and return it as valid JSON only (no ma
 }
 
 Rules:
-- startTime and endTime describe the training session as a whole (from the top of the sheet), not each individual attendee's own sign-in/out times
-- employees must be an array of every attendee you can read from the sheet
-- If a field is illegible or absent, use null
+- startTime and endTime describe the training session as a whole (from the top of the sign-in sheet), not each individual attendee's own sign-in/out times
+- topics must only include items that are checked/marked on the topics-checklist page — do not include unchecked items
+- employees must be an array of every attendee you can read across all sign-in sheet pages (de-duplicate the same person if they appear more than once)
+- If a field is illegible or absent, use null (topics and employees should be [] if none found)
 - Return ONLY the JSON object, nothing else`;
 
 export const extractFromSheet = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    if (!req.file) {
-      return res.status(400).json({ error: { message: 'No image file uploaded' } });
+    const files = req.files as Express.Multer.File[] | undefined;
+    if (!files || files.length === 0) {
+      return res.status(400).json({ error: { message: 'No image files uploaded' } });
     }
 
     if (!process.env.GEMINI_API_KEY) {
@@ -63,15 +68,12 @@ export const extractFromSheet = async (req: Request, res: Response, next: NextFu
 
     const model = genAI.getGenerativeModel({ model: 'gemini-flash-latest' });
 
-    const { data: imageData, mimeType: imageMimeType } = await prepareImageForOcr(req.file.buffer, req.file.mimetype);
-    const imagePart = {
-      inlineData: {
-        data: imageData,
-        mimeType: imageMimeType,
-      },
-    };
+    const imageParts = await Promise.all(files.map(async file => {
+      const { data, mimeType } = await prepareImageForOcr(file.buffer, file.mimetype);
+      return { inlineData: { data, mimeType } };
+    }));
 
-    const result = await model.generateContent([EXTRACTION_PROMPT, imagePart]);
+    const result = await model.generateContent([EXTRACTION_PROMPT, ...imageParts]);
     const text = result.response.text().trim();
 
     // Strip markdown code fences if model wraps in them anyway
@@ -96,15 +98,15 @@ export const extractFromSheet = async (req: Request, res: Response, next: NextFu
       }
     }
 
-    // Attempt to fuzzy-match employees and trainer against existing DB records
-    const [employeesSnap, trainersSnap, topicsSnap] = await Promise.all([
+    // Attempt to fuzzy-match employees and trainer against existing DB records.
+    // Trainers are just employees with isTrainer === true — no separate collection.
+    const [employeesSnap, topicsSnap] = await Promise.all([
       db.collection('employees').get(),
-      db.collection('trainers').get(),
       db.collection('trainingTopics').get(),
     ]);
 
     const existingEmployees = employeesSnap.docs.map(d => ({ id: d.id, ...d.data() as any }));
-    const existingTrainers = trainersSnap.docs.map(d => ({ id: d.id, ...d.data() as any }));
+    const existingTrainers = existingEmployees.filter((e: any) => e.isTrainer);
     const existingTopics = topicsSnap.docs.map(d => ({ id: d.id, ...d.data() as any }));
 
     // Match each extracted employee name against db (case-insensitive partial match)
@@ -129,12 +131,19 @@ export const extractFromSheet = async (req: Request, res: Response, next: NextFu
       (trainerLower && t.name && trainerLower.includes(t.name.toLowerCase()))
     );
 
-    // Match topic
-    const topicLower = (extracted.topic || '').toLowerCase();
-    const matchedTopic = existingTopics.find(t =>
-      t.name && t.name.toLowerCase().includes(topicLower) ||
-      (topicLower && t.name && topicLower.includes(t.name.toLowerCase()))
-    );
+    // Match each extracted (checked) topic against db (case-insensitive partial match)
+    const matchedTopics = (extracted.topics || []).map((topicName: string) => {
+      const topicLower = (topicName || '').toLowerCase();
+      const match = existingTopics.find(t =>
+        t.name && t.name.toLowerCase().includes(topicLower) ||
+        (topicLower && t.name && topicLower.includes(t.name.toLowerCase()))
+      );
+      return {
+        extractedName: topicName,
+        matchedId: match?.id || null,
+        matchedName: match?.name || null,
+      };
+    });
 
     res.json({
       extracted,
@@ -144,17 +153,13 @@ export const extractFromSheet = async (req: Request, res: Response, next: NextFu
           matchedId: matchedTrainer?.id || null,
           matchedName: matchedTrainer?.name || null,
         },
-        topic: {
-          extractedName: extracted.topic,
-          matchedId: matchedTopic?.id || null,
-          matchedName: matchedTopic?.name || null,
-        },
+        topics: matchedTopics,
         employees: matchedEmployees,
       },
       lookups: {
-        trainers: existingTrainers.map(t => ({ id: t.id, name: t.name })),
-        topics: existingTopics.map(t => ({ id: t.id, name: t.name })),
-        employees: existingEmployees.map(e => ({ id: e.id, name: e.name, email: e.email })),
+        trainers: existingTrainers.map((t: any) => ({ id: t.id, name: t.name, email: t.email, isSupervisor: !!t.isSupervisor })),
+        topics: existingTopics.map((t: any) => ({ id: t.id, name: t.name, requiresDetail: !!t.requiresDetail })),
+        employees: existingEmployees.map((e: any) => ({ id: e.id, name: e.name, email: e.email, isSupervisor: !!e.isSupervisor })),
       }
     });
   } catch (error) {

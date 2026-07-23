@@ -8,7 +8,7 @@ const { requireRole } = require('../middleware/requireRole');
 // should be publicly readable now that we can actually enforce that.
 router.get('/whitelist', requireRole(['supervisor']), async (req, res) => {
   try {
-    const trainersSnapshot = await db.collection('trainers').get();
+    const trainersSnapshot = await db.collection('employees').where('isTrainer', '==', true).get();
     const whitelist = [];
 
     trainersSnapshot.forEach(doc => {

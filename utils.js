@@ -34,7 +34,7 @@ const verifyMicrosoftToken = async (accessToken) => {
         Authorization: `Bearer ${accessToken}`,
       },
     });
-    
+
     return {
       email: response.data.mail || response.data.userPrincipalName,
       name: response.data.displayName || response.data.userPrincipalName,
@@ -46,8 +46,29 @@ const verifyMicrosoftToken = async (accessToken) => {
   }
 };
 
+const verifyYahooToken = async (accessToken) => {
+  try {
+    const axios = require('axios');
+    const response = await axios.get('https://api.login.yahoo.com/openid/v1/userinfo', {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+    });
+
+    return {
+      email: response.data.email,
+      name: response.data.name || [response.data.given_name, response.data.family_name].filter(Boolean).join(' '),
+      provider: 'yahoo',
+    };
+  } catch (error) {
+    console.error('Error verifying Yahoo token:', error);
+    throw new Error('Invalid Yahoo access token');
+  }
+};
+
 module.exports = {
   generateId,
   verifyGoogleToken,
-  verifyMicrosoftToken
+  verifyMicrosoftToken,
+  verifyYahooToken
 }; 

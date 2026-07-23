@@ -15,6 +15,7 @@ const employeeSchema = z.object({
     email: z.string().optional(),
     alternateEmails: z.array(z.string()).optional(),
     position: z.string().optional(),
+    phone: z.string().optional(),
     hireDate: z.string().optional(),
     locations: z.array(z.string()).optional(),
     homeLocation: z.string().optional(),
@@ -31,6 +32,7 @@ const employeeSchema = z.object({
     teamId: z.string().optional(), // Make optional if it's not strictly required by DB, adjust if needed
     isSupervisor: z.boolean().optional(),
     supervisorScope: z.enum(['all', 'locations']).optional(),
+    isTrainer: z.boolean().optional(),
   })
 });
 
@@ -40,6 +42,7 @@ const updateEmployeeSchema = z.object({
     email: z.string().optional(),
     alternateEmails: z.array(z.string()).optional(),
     position: z.string().optional(),
+    phone: z.string().optional(),
     hireDate: z.string().optional(),
     locations: z.array(z.string()).optional(),
     homeLocation: z.string().optional(),
@@ -56,6 +59,7 @@ const updateEmployeeSchema = z.object({
     teamId: z.string().optional(),
     isSupervisor: z.boolean().optional(),
     supervisorScope: z.enum(['all', 'locations']).optional(),
+    isTrainer: z.boolean().optional(),
   })
 });
 
@@ -63,10 +67,20 @@ const updateEmployeeSchema = z.object({
 const getAllEmployees = async (req, res, next) => {
   try {
     const employeesSnapshot = await db.collection('employees').get();
-    const employees = [];
+    let employees = [];
     employeesSnapshot.forEach(doc => {
       employees.push({ id: doc.id, ...doc.data() });
     });
+
+    // Location-scoped supervisors only see the roster at their own site(s);
+    // 'all sites' supervisors and trainers (who need the full list for
+    // trainee pickers / OCR matching) see everyone.
+    const user = req.user;
+    if (user && user.role === 'supervisor' && user.supervisorScope === 'locations') {
+      const allowedLocations = new Set(user.supervisorLocations || []);
+      employees = employees.filter(emp => (emp.locations || []).some(loc => allowedLocations.has(loc)));
+    }
+
     res.json(employees);
   } catch (error) {
     next(error); // Pass error to global error handler
@@ -91,17 +105,43 @@ const getEmployeeById = async (req, res, next) => {
 const createEmployee = async (req, res, next) => {
   try {
     const {
-      name, email, alternateEmails, position, hireDate, locations, homeLocation, certifications, isActive,
+      name, email, alternateEmails, position, phone, hireDate, locations, homeLocation, certifications, isActive,
       depth, certificationExpiration, hasSlideCert, hasSwimCert,
       isEliteSupervisor, badgeNumber, firstName, lastName, teamId,
-      isSupervisor, supervisorScope
+      isSupervisor, supervisorScope, isTrainer
     } = req.body;
+
+    // Prevent duplicate records — check by badge number first (the more
+    // reliable real-world unique identifier), falling back to email. This
+    // matches against active AND archived employees, since re-adding
+    // someone who was archived should surface as "unarchive them instead",
+    // not create a second record.
+    const trimmedBadge = badgeNumber ? String(badgeNumber).trim() : '';
+    const trimmedEmail = email ? String(email).trim() : '';
+    let existingDoc = null;
+    if (trimmedBadge) {
+      const badgeMatch = await db.collection('employees').where('badgeNumber', '==', trimmedBadge).limit(1).get();
+      if (!badgeMatch.empty) existingDoc = badgeMatch.docs[0];
+    }
+    if (!existingDoc && trimmedEmail) {
+      const emailMatch = await db.collection('employees').where('email', '==', trimmedEmail).limit(1).get();
+      if (!emailMatch.empty) existingDoc = emailMatch.docs[0];
+    }
+    if (existingDoc) {
+      const existing = existingDoc.data();
+      const matchedOn = trimmedBadge && existing.badgeNumber === trimmedBadge ? `badge #${trimmedBadge}` : `email ${trimmedEmail}`;
+      const message = existing.isActive
+        ? `${existing.name} already exists (matched on ${matchedOn}). Edit their existing record instead of creating a new one.`
+        : `${existing.name} already exists as an archived employee (matched on ${matchedOn}). Go to the Archived Employees tab and unarchive them instead of creating a new record.`;
+      return res.status(409).json({ error: { message } });
+    }
 
     const employeeData = {
       name,
       email: email || '',
       alternateEmails: Array.isArray(alternateEmails) ? alternateEmails : [],
       position: position || '',
+      phone: phone || '',
       hireDate: hireDate || null,
       locations: Array.isArray(locations) ? locations : [],
       homeLocation: homeLocation || (Array.isArray(locations) ? locations[0] : null) || null,
@@ -119,6 +159,8 @@ const createEmployee = async (req, res, next) => {
       teamId: teamId || null,
       isSupervisor: !!isSupervisor,
       supervisorScope: isSupervisor ? (supervisorScope || 'locations') : null,
+      isTrainer: !!isTrainer,
+      totalHoursLed: 0,
       totalHours: 0,
       createdAt: new Date().toISOString()
     };
@@ -138,10 +180,10 @@ const updateEmployee = async (req, res, next) => {
   try {
     const { id } = req.params;
     const {
-      name, email, alternateEmails, position, hireDate, locations, homeLocation, certifications, isActive,
+      name, email, alternateEmails, position, phone, hireDate, locations, homeLocation, certifications, isActive,
       depth, certificationExpiration, hasSlideCert, hasSwimCert,
       isEliteSupervisor, badgeNumber, firstName, lastName, teamId,
-      isSupervisor, supervisorScope
+      isSupervisor, supervisorScope, isTrainer
     } = req.body;
 
     const docRef = db.collection('employees').doc(id);
@@ -156,6 +198,7 @@ const updateEmployee = async (req, res, next) => {
     if (email !== undefined) updateData.email = email;
     if (alternateEmails !== undefined) updateData.alternateEmails = alternateEmails;
     if (position !== undefined) updateData.position = position;
+    if (phone !== undefined) updateData.phone = phone;
     if (hireDate !== undefined) updateData.hireDate = hireDate;
     if (locations !== undefined) updateData.locations = locations;
     if (homeLocation !== undefined) updateData.homeLocation = homeLocation;
@@ -179,6 +222,7 @@ const updateEmployee = async (req, res, next) => {
     } else if (supervisorScope !== undefined) {
       updateData.supervisorScope = supervisorScope;
     }
+    if (isTrainer !== undefined) updateData.isTrainer = isTrainer;
     updateData.updatedAt = new Date().toISOString();
 
     await docRef.update(updateData);

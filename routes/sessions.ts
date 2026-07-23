@@ -198,7 +198,7 @@ router.post('/:sessionId/close', requireRole(STAFF), async (req, res) => {
 
     let trainersCredited = 0;
     for (const trainerId of trainerIds) {
-      const trainerRef = db.collection('trainers').doc(trainerId);
+      const trainerRef = db.collection('employees').doc(trainerId);
       const trainerDoc = await trainerRef.get();
       if (!trainerDoc.exists) continue;
 
