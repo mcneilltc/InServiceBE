@@ -67,20 +67,23 @@ export const selfCheckin = async (req: Request, res: Response, next: NextFunctio
       return res.status(409).json({ message: 'Already checked in for this session', existing });
     }
 
+    // Fetch session details first — its location is the check-in's location
+    // (where the training physically happened), not the employee's home site.
+    const sessionDoc = await db.collection('sessions').doc(sessionId).get();
+    const sessionData = sessionDoc.exists ? sessionDoc.data() : null;
+
     // Save check-in
     const checkinData = {
       sessionId,
       employeeId,
       badgeNumber: badgeTrim,
       name: `${employeeData.firstName || ''} ${employeeData.lastName || ''}`.trim(),
+      email: employeeData.email || '',
+      location: sessionData?.location || (employeeData.locations && employeeData.locations[0]) || employeeData.homeLocation || '',
       checkinTime: new Date().toISOString(),
     };
 
     const docRef = await db.collection('checkins').add(checkinData);
-
-    // Fetch session details for confirmation
-    const sessionDoc = await db.collection('sessions').doc(sessionId).get();
-    const sessionData = sessionDoc.exists ? sessionDoc.data() : null;
 
     res.status(200).json({ id: docRef.id, checkin: checkinData, session: sessionData });
   } catch (error) {

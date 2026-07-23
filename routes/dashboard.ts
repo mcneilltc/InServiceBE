@@ -101,15 +101,24 @@ router.get('/employee-hours/:employeeId/yearly', async (req, res) => {
 // Get dashboard statistics with filters
 router.get('/stats', async (req: any, res) => {
   try {
-    const { workSite, period, startDate, endDate } = req.query;
+    const { workSite, homeSite, period, startDate, endDate } = req.query;
 
-    // workSite may be a single site, a comma-separated list of sites (for a
-    // supervisor scoped to multiple locations), or absent/'all' for everything.
-    const clientRequestedSites: string[] | null = workSite && workSite !== 'all'
+    // workSite narrows by TRAINING location (where a session/check-in
+    // physically happened) — a display filter, not a security boundary. A
+    // supervisor scoped to ERRC still needs to be able to filter by e.g. MCAC
+    // to see where their own ERRC-homebased staff went to train — so this is
+    // deliberately NOT clamped to the caller's own scope.
+    const requestedSites: string[] | null = workSite && workSite !== 'all'
       ? String(workSite).split(',').map((s) => s.trim()).filter(Boolean)
       : null;
-    // Clamp to the verified session's scope — never trust the client's own claim.
-    const requestedSites = clampSitesToScope(req.user, clientRequestedSites);
+
+    // homeSite narrows the roster itself by employees' HOME location — this
+    // is the real security boundary, so it IS clamped to the caller's scope.
+    // With no homeSite given, a location-scoped supervisor still gets
+    // clamped to their own site(s) by default (clampSitesToScope returns
+    // their full allowed list rather than null in that case).
+    const clientRequestedHomeSites: string[] | null = homeSite ? [String(homeSite)] : null;
+    const requestedHomeSites = clampSitesToScope(req.user, clientRequestedHomeSites);
 
     // Calculate date range based on period
     let dateStart, dateEnd;
@@ -141,37 +150,70 @@ router.get('/stats', async (req: any, res) => {
       dateEnd = new Date();
     }
 
-    // Get all check-ins.
-    // requestedSites === [] means the clamp reduced a scoped supervisor's
-    // request to nothing they're allowed to see — that must return no rows,
-    // not fall through to "no filter" the way a naive length check would.
-    let checkinsQuery = db.collection('checkins');
-    if (requestedSites) {
-      if (requestedSites.length === 0) {
-        checkinsQuery = checkinsQuery.where('location', '==', '__no_access__');
-      } else if (requestedSites.length === 1) {
-        checkinsQuery = checkinsQuery.where('location', '==', requestedSites[0]);
-      } else {
-        checkinsQuery = checkinsQuery.where('location', 'in', requestedSites);
-      }
+    // Employees + their home locations first — the roster and check-in
+    // scoping below both depend on this.
+    const allEmployeesSnapshot = await db.collection('employees').get();
+    const allEmployees: any[] = [];
+
+    for (const employeeDoc of allEmployeesSnapshot.docs) {
+      const employeeData = employeeDoc.data();
+
+      // Calculate total hours from training sessions (length is stored in hours,
+      // consistent with reports.ts, employeeSelfServiceController, and the session close-out pipeline).
+      // Only sessions at the filtered training location count, if one is given.
+      const sessionsSnapshot = await employeeDoc.ref.collection('trainingSessions').get();
+      let totalHours = 0;
+      sessionsSnapshot.forEach((sessionDoc: any) => {
+        const session = sessionDoc.data();
+        const sessionDate = new Date(session.date);
+        if (sessionDate >= dateStart && sessionDate <= dateEnd) {
+          if (!requestedSites || requestedSites.includes(session.location)) {
+            totalHours += parseFloat(session.length) || 0;
+          }
+        }
+      });
+
+      const requiredHours = 4;
+      const hoursLeft = Math.max(0, requiredHours - totalHours);
+
+      allEmployees.push({
+        id: employeeDoc.id,
+        ...employeeData,
+        totalHours,
+        requiredHours,
+        hoursLeft
+      });
     }
 
-    const checkinsSnapshot = await checkinsQuery.get();
-    const checkins = [];
-    
-    checkinsSnapshot.forEach(doc => {
+    // Roster scoping — always by home location, this is the security boundary.
+    let filteredEmployees = allEmployees;
+    if (requestedHomeSites) {
+      filteredEmployees = allEmployees.filter((emp: any) => requestedHomeSites.includes(emp.homeLocation));
+    }
+    const inScopeEmployeeIds = new Set(filteredEmployees.map((e: any) => e.id));
+
+    // Check-ins: scoped to the (home-scoped) roster first, then narrowed by
+    // training location if requested. "All sites" for a scoped supervisor
+    // still means all of *their* people's check-ins, never company-wide.
+    const checkinsSnapshot = await db.collection('checkins').get();
+    const homeScopedCheckins: any[] = [];
+    checkinsSnapshot.forEach((doc: any) => {
       const checkin = doc.data();
       const checkinDate = new Date(checkin.checkinTime);
-      if (checkinDate >= dateStart && checkinDate <= dateEnd) {
-        checkins.push({ id: doc.id, ...checkin });
-      }
+      if (checkinDate < dateStart || checkinDate > dateEnd) return;
+      if (requestedHomeSites && !inScopeEmployeeIds.has(checkin.employeeId)) return;
+      homeScopedCheckins.push({ id: doc.id, ...checkin });
     });
+    const checkins = requestedSites
+      ? homeScopedCheckins.filter((c) => requestedSites.includes(c.location))
+      : homeScopedCheckins;
+    const allCheckins = homeScopedCheckins;
 
-    // Get all sessions
+    // Get all sessions (not roster-scoped — a session isn't "owned" by one
+    // supervisor's staff — just narrowed by training location if requested).
     const sessionsSnapshot = await db.collection('sessions').get();
-    const sessions = [];
-    
-    sessionsSnapshot.forEach(doc => {
+    const sessions: any[] = [];
+    sessionsSnapshot.forEach((doc: any) => {
       const session = doc.data();
       const sessionDate = new Date(session.date);
       if (sessionDate >= dateStart && sessionDate <= dateEnd) {
@@ -182,57 +224,16 @@ router.get('/stats', async (req: any, res) => {
     });
 
     // Calculate statistics
-    const uniqueEmployees = new Set(checkins.map(c => c.email || c.name));
+    const uniqueEmployees = new Set(checkins.map((c) => c.employeeId || c.email || c.name));
     const completions = checkins.length;
     const totalSessions = sessions.length;
-    
-    // Get employees who need to complete training with hours information
-    const allEmployeesSnapshot = await db.collection('employees').get();
-    const allEmployees = [];
-    
-    for (const employeeDoc of allEmployeesSnapshot.docs) {
-      const employeeData = employeeDoc.data();
-      
-      // Calculate total hours from training sessions (length is stored in hours,
-      // consistent with reports.ts, employeeSelfServiceController, and the session close-out pipeline)
-      const sessionsSnapshot = await employeeDoc.ref.collection('trainingSessions').get();
-      let totalHours = 0;
-      sessionsSnapshot.forEach(sessionDoc => {
-        const session = sessionDoc.data();
-        const sessionDate = new Date(session.date);
-        if (sessionDate >= dateStart && sessionDate <= dateEnd) {
-          totalHours += parseFloat(session.length) || 0;
-        }
-      });
-
-      const requiredHours = 4;
-      const hoursLeft = Math.max(0, requiredHours - totalHours);
-      
-      allEmployees.push({ 
-        id: employeeDoc.id, 
-        ...employeeData,
-        totalHours,
-        requiredHours,
-        hoursLeft
-      });
-    }
-
-    // Filter by workSite if specified — employees store their site(s) in `locations` (array)
-    let filteredEmployees = allEmployees;
-    if (requestedSites) {
-      filteredEmployees = allEmployees.filter((emp: any) =>
-        (emp.locations || []).some((loc: string) => requestedSites.includes(loc))
-      );
-    }
 
     // Show all employees with their training status
     // Status calculation: complete (>=100%), atRisk (75-99%), incomplete (<75%)
     const employeesNeedingTraining = filteredEmployees.map(emp => {
-      const hasCheckedIn = checkins.some(c => 
-        c.email === emp.email || c.name === emp.name
-      );
+      const hasCheckedIn = checkins.some(c => c.employeeId === emp.id);
       const hasCompletedHours = emp.totalHours >= emp.requiredHours;
-      
+
       // Determine status based on hours completed
       let status = 'incomplete';
       if (emp.totalHours >= emp.requiredHours) {
@@ -240,7 +241,7 @@ router.get('/stats', async (req: any, res) => {
       } else if (emp.totalHours >= emp.requiredHours * 0.75) {
         status = 'atRisk';
       }
-      
+
       return {
         ...emp,
         hasCheckedIn,
@@ -249,25 +250,8 @@ router.get('/stats', async (req: any, res) => {
       };
     });
 
-    // Calculate training completed for all sites combined
-    const allCheckinsSnapshot = await db.collection('checkins').get();
-    const allCheckins = [];
-    allCheckinsSnapshot.forEach(doc => {
-      const checkin = doc.data();
-      const checkinDate = new Date(checkin.checkinTime);
-      if (checkinDate >= dateStart && checkinDate <= dateEnd) {
-        allCheckins.push({ id: doc.id, ...checkin });
-      }
-    });
-
-    // Calculate training completed based on filters
-    let trainingCompleted = allCheckins.length;
-    if (workSite && workSite !== 'all') {
-      trainingCompleted = checkins.length; // Already filtered by workSite
-    }
-
     // Count employees who actually need training (not complete)
-    const needToCompleteCount = employeesNeedingTraining.filter(emp => 
+    const needToCompleteCount = employeesNeedingTraining.filter(emp =>
       emp.status !== 'complete'
     ).length;
 
@@ -278,18 +262,19 @@ router.get('/stats', async (req: any, res) => {
         id: emp.id,
         name: emp.name,
         email: emp.email,
-        location: (emp.locations && emp.locations.join(', ')) || 'Unknown',
+        location: emp.homeLocation || 'Unknown',
         totalHours: emp.totalHours || 0,
         requiredHours: emp.requiredHours || 4,
         hoursLeft: emp.hoursLeft || 0,
         status: emp.status
       })),
-      trainingCompleted: trainingCompleted,
+      trainingCompleted: checkins.length,
       trainingCompletedAllSites: allCheckins.length,
       totalSessions,
       uniqueEmployees: uniqueEmployees.size,
       period: period || 'custom',
-      workSite: workSite || 'all'
+      workSite: workSite || 'all',
+      homeSite: homeSite || 'all'
     });
   } catch (error) {
     console.error('Error fetching dashboard stats:', error);

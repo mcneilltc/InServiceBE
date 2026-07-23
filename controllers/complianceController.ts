@@ -77,7 +77,7 @@ export const getComplianceStatus = async (req: Request, res: Response, next: Nex
         id: doc.id,
         name: data.name || 'Unknown',
         email: data.email || '',
-        location: (data.locations && data.locations[0]) || data.location || 'Unknown',
+        location: data.homeLocation || (data.locations && data.locations[0]) || data.location || 'Unknown',
         hoursThisMonth: hours,
         status,
         hoursNeededByMidMonth: Math.max(0, MIDMONTH_THRESHOLD - hours),
@@ -154,8 +154,8 @@ export const sendMidMonthNotices = async (req: Request, res: Response, next: Nex
       const data = doc.data();
       const hours = await getEmployeeHoursForMonth(doc.id, monthStart, monthEnd);
       if (hours < MIDMONTH_THRESHOLD) {
-        needsNotice.push({ id: doc.id, name: data.name || `${data.firstName} ${data.lastName}`.trim(), email: data.email || '', location: data.location || (data.locations && data.locations[0]) || 'Unknown', hours });
-        const site = data.location || (data.locations && data.locations[0]) || 'Unknown';
+        needsNotice.push({ id: doc.id, name: data.name || `${data.firstName} ${data.lastName}`.trim(), email: data.email || '', location: data.homeLocation || (data.locations && data.locations[0]) || data.location || 'Unknown', hours });
+        const site = data.homeLocation || (data.locations && data.locations[0]) || data.location || 'Unknown';
         if (!managersBySite[site]) managersBySite[site] = [];
         if (hours === 0) managersBySite[site].push({ id: doc.id, name: data.name || '', email: data.email || '' });
       }
@@ -200,7 +200,7 @@ export const sendEndOfMonthAlerts = async (req: Request, res: Response, next: Ne
       const data = doc.data();
       const hours = await getEmployeeHoursForMonth(doc.id, monthStart, monthEnd);
       if (hours < MONTHLY_THRESHOLD) {
-        atRisk.push({ id: doc.id, name: data.name || `${data.firstName} ${data.lastName}`.trim(), email: data.email || '', location: data.location || (data.locations && data.locations[0]) || 'Unknown', hours });
+        atRisk.push({ id: doc.id, name: data.name || `${data.firstName} ${data.lastName}`.trim(), email: data.email || '', location: data.homeLocation || (data.locations && data.locations[0]) || data.location || 'Unknown', hours });
       }
     }
 

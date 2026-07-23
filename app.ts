@@ -38,6 +38,7 @@ import authRoutes from './routes/auth';
 import ocrRoutes from './routes/ocr';
 import complianceRoutes from './routes/compliance';
 import employeeSelfServiceRoutes from './routes/employeeSelfService';
+import certificationRoutes from './routes/certifications';
 const { requireRole } = require('./middleware/requireRole');
 
 const SUPERVISOR = requireRole(['supervisor']);
@@ -56,6 +57,7 @@ app.use('/api/admin', adminRoutes);
 app.use('/api/ocr', STAFF, ocrRoutes);
 app.use('/api/compliance', SUPERVISOR, complianceRoutes);
 app.use('/api/employee', employeeSelfServiceRoutes);
+app.use('/api/certifications', certificationRoutes);
 
 app.get('/', (req, res) => {
   res.send('Training Management Application Backend is running!');

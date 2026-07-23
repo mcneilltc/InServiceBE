@@ -1,6 +1,11 @@
 const { db } = require('../config/firebase');
 const { z } = require('zod');
 
+const certificationSchema = z.object({
+  type: z.string().min(1, "Certification type is required"),
+  expirationDate: z.string().min(1, "Expiration date is required"),
+});
+
 // Validation Schemas
 const employeeSchema = z.object({
   body: z.object({
@@ -12,6 +17,8 @@ const employeeSchema = z.object({
     position: z.string().optional(),
     hireDate: z.string().optional(),
     locations: z.array(z.string()).optional(),
+    homeLocation: z.string().optional(),
+    certifications: z.array(certificationSchema).optional(),
     isActive: z.boolean().optional(),
     depth: z.string().nullable().optional(),
     certificationExpiration: z.string().nullable().optional(),
@@ -35,6 +42,8 @@ const updateEmployeeSchema = z.object({
     position: z.string().optional(),
     hireDate: z.string().optional(),
     locations: z.array(z.string()).optional(),
+    homeLocation: z.string().optional(),
+    certifications: z.array(certificationSchema).optional(),
     isActive: z.boolean().optional(),
     depth: z.string().nullable().optional(),
     certificationExpiration: z.string().nullable().optional(),
@@ -82,7 +91,7 @@ const getEmployeeById = async (req, res, next) => {
 const createEmployee = async (req, res, next) => {
   try {
     const {
-      name, email, alternateEmails, position, hireDate, locations, isActive,
+      name, email, alternateEmails, position, hireDate, locations, homeLocation, certifications, isActive,
       depth, certificationExpiration, hasSlideCert, hasSwimCert,
       isEliteSupervisor, badgeNumber, firstName, lastName, teamId,
       isSupervisor, supervisorScope
@@ -95,6 +104,8 @@ const createEmployee = async (req, res, next) => {
       position: position || '',
       hireDate: hireDate || null,
       locations: Array.isArray(locations) ? locations : [],
+      homeLocation: homeLocation || (Array.isArray(locations) ? locations[0] : null) || null,
+      certifications: Array.isArray(certifications) ? certifications : [],
       isActive: isActive !== undefined ? isActive : true,
       archivedAt: null,
       depth: depth || null,
@@ -127,7 +138,7 @@ const updateEmployee = async (req, res, next) => {
   try {
     const { id } = req.params;
     const {
-      name, email, alternateEmails, position, hireDate, locations, isActive,
+      name, email, alternateEmails, position, hireDate, locations, homeLocation, certifications, isActive,
       depth, certificationExpiration, hasSlideCert, hasSwimCert,
       isEliteSupervisor, badgeNumber, firstName, lastName, teamId,
       isSupervisor, supervisorScope
@@ -147,6 +158,8 @@ const updateEmployee = async (req, res, next) => {
     if (position !== undefined) updateData.position = position;
     if (hireDate !== undefined) updateData.hireDate = hireDate;
     if (locations !== undefined) updateData.locations = locations;
+    if (homeLocation !== undefined) updateData.homeLocation = homeLocation;
+    if (certifications !== undefined) updateData.certifications = certifications;
     if (isActive !== undefined) {
       updateData.isActive = isActive;
       updateData.archivedAt = isActive ? null : new Date().toISOString();

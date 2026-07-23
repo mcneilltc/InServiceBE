@@ -3,6 +3,7 @@ const express = require('express');
 const router = express.Router();
 const { db } = require('../config/firebase');
 const { requireRole } = require('../middleware/requireRole');
+const { clampSitesToScope } = require('../services/authService');
 import { selfCheckin } from '../controllers/checkinController';
 
 // POST /api/checkin
@@ -82,7 +83,11 @@ router.post('/', async (req, res) => {
       badgeNumber: employeeData.badgeNumber || null,
       name: employeeData.name || `${employeeData.firstName || ''} ${employeeData.lastName || ''}`.trim(),
       email: employeeData.email || '',
-      location: (employeeData.locations && employeeData.locations[0]) || employeeData.location || sessionData.location || '',
+      // The check-in's location is where the training physically happened —
+      // the session's own location — not the employee's home site. Those are
+      // deliberately different things: an employee's home site can supervise
+      // scoping, but this field is what lets "where did my staff train" work.
+      location: sessionData.location || (employeeData.locations && employeeData.locations[0]) || employeeData.location || '',
       checkinTime: new Date().toISOString(),
     };
 
@@ -111,22 +116,47 @@ router.post('/self', (req, res, next) => {
 });
 
 // Get all check-ins — supervisor only (manager dashboard)
-router.get('/', requireRole(['supervisor']), async (req, res) => {
+//
+// Scoping is by the checked-in employee's *home* location, not the check-in's
+// own location — a supervisor of ERRC should see all their ERRC-homebased
+// staff's check-ins regardless of where those check-ins happened, so they can
+// tell what other locations their people train at. The `location` param
+// narrows those results down to a specific training location; `homeSite`
+// (only meaningful for an all-site supervisor, or one scoped to several
+// sites) narrows the roster itself to one home site.
+router.get('/', requireRole(['supervisor']), async (req: any, res) => {
   try {
+    const { location, homeSite } = req.query;
+
+    const employeesSnapshot = await db.collection('employees').get();
+    const homeLocationById: Record<string, string> = {};
+    employeesSnapshot.forEach((doc: any) => {
+      homeLocationById[doc.id] = doc.data().homeLocation || '';
+    });
+
+    const clientRequestedHomeSites: string[] | null = homeSite ? [String(homeSite)] : null;
+    const requestedHomeSites = clampSitesToScope(req.user, clientRequestedHomeSites);
+
     const checkinsSnapshot = await db.collection('checkins').get();
-    const checkins = [];
-    
-    checkinsSnapshot.forEach(doc => {
+    let checkins: any[] = [];
+    checkinsSnapshot.forEach((doc: any) => {
       checkins.push({ id: doc.id, ...doc.data() });
     });
-    
+
+    if (requestedHomeSites) {
+      checkins = checkins.filter((c) => requestedHomeSites.includes(homeLocationById[c.employeeId]));
+    }
+    if (location) {
+      checkins = checkins.filter((c) => c.location === location);
+    }
+
     // Sort by check-in time (most recent first)
     checkins.sort((a: any, b: any) => {
       const timeA = new Date(a.checkinTime).getTime();
       const timeB = new Date(b.checkinTime).getTime();
       return timeB - timeA;
     });
-    
+
     res.json(checkins);
   } catch (error) {
     console.error('Error getting check-ins:', error);
