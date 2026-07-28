@@ -10,7 +10,10 @@ if (!admin.apps.length) {
     const serviceAccount = JSON.parse(fs.readFileSync(serviceAccountPath, 'utf8')); // Read and parse the file
     admin.initializeApp({
       credential: admin.credential.cert(serviceAccount),
-      databaseURL: process.env.FIREBASE_DATABASE_URL
+      databaseURL: process.env.FIREBASE_DATABASE_URL,
+      // Cloud Storage must be enabled for this project in the Firebase console
+      // before this bucket actually exists — see FIREBASE_STORAGE_BUCKET in .env.
+      storageBucket: process.env.FIREBASE_STORAGE_BUCKET || `${serviceAccount.project_id}.appspot.com`,
     });
 
     console.log('Firebase Admin initialized successfully');
@@ -21,6 +24,7 @@ if (!admin.apps.length) {
 }
 
 const db = admin.firestore();
+const bucket = admin.storage().bucket();
 
 // Optional: Add error handling for Firestore operations
 db.settings({
@@ -28,4 +32,4 @@ db.settings({
   ignoreUndefinedProperties: true
 });
 
-export { admin, db }; 
+export { admin, db, bucket };

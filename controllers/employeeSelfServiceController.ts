@@ -59,24 +59,58 @@ export const lookupEmployee = async (req: Request, res: Response, next: NextFunc
       .collection('trainingSessions')
       .get();
 
-    const thisMonthSessions: any[] = [];
-    let totalHoursThisMonth = 0;
+    const rawSessions: { id: string; data: FirebaseFirestore.DocumentData }[] = [];
+    const trainerIdsToResolve = new Set<string>();
 
     sessionsSnap.forEach((doc: any) => {
       const s = doc.data();
       const sessionDate = s.date ? new Date(s.date) : null;
       if (sessionDate && sessionDate >= monthStart && sessionDate <= monthEnd) {
-        const hrs = parseFloat(s.length) || 0;
-        totalHoursThisMonth += hrs;
-        thisMonthSessions.push({
-          id: doc.id,
-          topics: s.topics || (s.topic ? [s.topic] : []),
-          trainer: s.trainer,
-          date: s.date,
-          hours: hrs,
-          location: s.location,
-        });
+        rawSessions.push({ id: doc.id, data: s });
+        const trainerValues: string[] = Array.isArray(s.trainer) ? s.trainer : (s.trainer ? [s.trainer] : []);
+        trainerValues.forEach((t) => trainerIdsToResolve.add(t));
       }
+    });
+
+    // Historical sessions stored `trainer` as a raw employee ID, an array of employee
+    // IDs, or (pre-dating the trainer-consistency fix) an already-resolved name string.
+    // Resolve every distinct value against the employees collection and fall back to the
+    // original value when it isn't a known employee ID, since it's then already a name.
+    const trainerNameMap = new Map<string, string>();
+    await Promise.all(
+      Array.from(trainerIdsToResolve).map(async (trainerId) => {
+        try {
+          const trainerDoc = await db.collection('employees').doc(trainerId).get();
+          if (trainerDoc.exists) {
+            const trainerData = trainerDoc.data() as any;
+            const displayName = trainerData.name || `${trainerData.firstName || ''} ${trainerData.lastName || ''}`.trim();
+            if (displayName) {
+              trainerNameMap.set(trainerId, displayName);
+            }
+          }
+        } catch {
+          // Not a resolvable document ID (e.g. malformed legacy value) — leave unresolved.
+        }
+      })
+    );
+
+    const resolveTrainerDisplay = (trainerField: any): string => {
+      const values: string[] = Array.isArray(trainerField) ? trainerField : (trainerField ? [trainerField] : []);
+      return values.map((v) => trainerNameMap.get(v) || v).join(', ');
+    };
+
+    let totalHoursThisMonth = 0;
+    const thisMonthSessions: any[] = rawSessions.map(({ id, data: s }) => {
+      const hrs = parseFloat(s.length) || 0;
+      totalHoursThisMonth += hrs;
+      return {
+        id,
+        topics: s.topics || (s.topic ? [s.topic] : []),
+        trainer: resolveTrainerDisplay(s.trainer),
+        date: s.date,
+        hours: hrs,
+        location: s.location,
+      };
     });
 
     totalHoursThisMonth = Math.round(totalHoursThisMonth * 10) / 10;

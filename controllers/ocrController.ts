@@ -1,8 +1,9 @@
 import { Request, Response, NextFunction } from 'express';
 import { GoogleGenerativeAI } from '@google/generative-ai';
-import { db } from '../config/firebase';
+import { db, bucket } from '../config/firebase';
 import moment from 'moment';
 import sharp from 'sharp';
+import { randomUUID } from 'crypto';
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
 
@@ -28,6 +29,29 @@ async function prepareImageForOcr(buffer: Buffer, mimeType: string): Promise<{ d
     console.warn('Image resize before OCR failed, sending original:', (error as Error).message);
     return { data: buffer.toString('base64'), mimeType };
   }
+}
+
+// Persists the original uploaded sheet photos to Cloud Storage so the source
+// document backing a session survives past the OCR request — previously
+// these were only ever held in memory for the Gemini call, then discarded.
+// Deliberately fails open: if Storage isn't reachable (e.g. not yet enabled
+// for this Firebase project), extraction still succeeds without image URLs
+// rather than blocking the whole upload flow on a non-essential step.
+async function persistSheetImages(files: Express.Multer.File[]): Promise<string[]> {
+  const urls: string[] = [];
+  for (const file of files) {
+    try {
+      const ext = (file.mimetype.split('/')[1] || 'jpg').replace('jpeg', 'jpg');
+      const path = `sign-in-sheets/${moment().format('YYYY/MM')}/${randomUUID()}.${ext}`;
+      const blob = bucket.file(path);
+      await blob.save(file.buffer, { contentType: file.mimetype });
+      const [url] = await blob.getSignedUrl({ action: 'read', expires: '01-01-2100' });
+      urls.push(url);
+    } catch (error) {
+      console.warn('Failed to persist sign-in sheet image (Cloud Storage may not be enabled for this project):', (error as Error).message);
+    }
+  }
+  return urls;
 }
 
 const EXTRACTION_PROMPT = `You are analyzing photos of a training/inservice sign-in packet. The images provided together make up ONE packet and may include two kinds of pages:
@@ -67,6 +91,10 @@ export const extractFromSheet = async (req: Request, res: Response, next: NextFu
     }
 
     const model = genAI.getGenerativeModel({ model: 'gemini-flash-latest' });
+
+    // Kick off persistence alongside the OCR-prep resize — independent of
+    // it, so a Storage hiccup can't slow down or fail extraction.
+    const persistPromise = persistSheetImages(files);
 
     const imageParts = await Promise.all(files.map(async file => {
       const { data, mimeType } = await prepareImageForOcr(file.buffer, file.mimetype);
@@ -145,8 +173,11 @@ export const extractFromSheet = async (req: Request, res: Response, next: NextFu
       };
     });
 
+    const sheetImageUrls = await persistPromise;
+
     res.json({
       extracted,
+      sheetImageUrls,
       matched: {
         trainer: {
           extractedName: extracted.trainer,
