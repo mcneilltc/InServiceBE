@@ -134,8 +134,14 @@ router.get('/', requireRole(['supervisor']), async (req: any, res) => {
       homeLocationById[doc.id] = doc.data().homeLocation || '';
     });
 
-    const clientRequestedHomeSites: string[] | null = homeSite ? [String(homeSite)] : null;
+    const clientRequestedHomeSites: string[] | null = homeSite
+      ? String(homeSite).split(',').map((s) => s.trim()).filter(Boolean)
+      : null;
     const requestedHomeSites = clampSitesToScope(req.user, clientRequestedHomeSites);
+
+    const requestedLocations: string[] | null = location
+      ? String(location).split(',').map((s) => s.trim()).filter(Boolean)
+      : null;
 
     const checkinsSnapshot = await db.collection('checkins').get();
     let checkins: any[] = [];
@@ -146,8 +152,8 @@ router.get('/', requireRole(['supervisor']), async (req: any, res) => {
     if (requestedHomeSites) {
       checkins = checkins.filter((c) => requestedHomeSites.includes(homeLocationById[c.employeeId]));
     }
-    if (location) {
-      checkins = checkins.filter((c) => c.location === location);
+    if (requestedLocations) {
+      checkins = checkins.filter((c) => requestedLocations.includes(c.location));
     }
 
     // Sort by check-in time (most recent first)

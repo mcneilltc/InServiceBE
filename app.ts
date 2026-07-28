@@ -39,6 +39,7 @@ import complianceRoutes from './routes/compliance';
 import employeeSelfServiceRoutes from './routes/employeeSelfService';
 import certificationRoutes from './routes/certifications';
 import siteRoutes from './routes/sites';
+import { runSessionAutomationCheck } from './services/sessionAutomation';
 const { requireRole } = require('./middleware/requireRole');
 
 const SUPERVISOR = requireRole(['supervisor']);
@@ -70,6 +71,21 @@ app.use(errorHandler);
 if (require.main === module) {
   app.listen(port, () => {
     console.log(`Server is running on port ${port}`);
+  });
+
+  // Reminds a session's trainer(s) 5 minutes after the scheduled end if it
+  // hasn't been closed out, then auto-closes it 24 hours after the scheduled
+  // end (crediting the session's listed duration, not real elapsed time)
+  // if it's still open. Polling every minute keeps both thresholds tight
+  // without needing an external scheduler.
+  const SESSION_AUTOMATION_INTERVAL_MS = 60 * 1000;
+  setInterval(() => {
+    runSessionAutomationCheck().catch((err) => {
+      console.error('[session-automation] Check failed:', err);
+    });
+  }, SESSION_AUTOMATION_INTERVAL_MS);
+  runSessionAutomationCheck().catch((err) => {
+    console.error('[session-automation] Initial check failed:', err);
   });
 }
 

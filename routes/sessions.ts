@@ -2,136 +2,11 @@ export {};
 const express = require('express');
 const router = express.Router();
 const { db } = require('../config/firebase');
-const admin = require('firebase-admin');
 const moment = require('moment');
 const { requireRole } = require('../middleware/requireRole');
+import { performCloseOut } from '../services/sessionCloseOutService';
 
 const STAFF = ['supervisor', 'trainer'];
-
-// Shared close-out logic: credits every checked-in employee with hours (from
-// their individual check-in time to closeOutTime), and credits every trainer
-// on the session with hours led (from the session's effective start to
-// closeOutTime). Used both by the interactive "close out this live session
-// now" route and by the from-sheet import, which supplies the sheet's own
-// recorded end time instead of "now".
-async function performCloseOut(sessionId: string, closeOutTimeOverride?: Date) {
-  const sessionRef = db.collection('sessions').doc(sessionId);
-  const sessionDoc = await sessionRef.get();
-
-  if (!sessionDoc.exists) {
-    const err: any = new Error('Session not found');
-    err.statusCode = 404;
-    throw err;
-  }
-
-  const sessionData = sessionDoc.data();
-  if (sessionData.status === 'completed') {
-    const err: any = new Error('This session has already been closed out.');
-    err.statusCode = 400;
-    throw err;
-  }
-
-  const checkinsSnap = await db.collection('checkins').where('sessionId', '==', sessionId).get();
-  const checkins = checkinsSnap.docs.map((d: any) => ({ id: d.id, ...d.data() }));
-
-  const closeOutTime = closeOutTimeOverride || new Date();
-
-  // Effective session start = earliest check-in, else the scheduled date/startTime, else close-out time
-  let effectiveStart = closeOutTime;
-  const checkinTimes = checkins
-    .map((c: any) => (c.checkinTime ? new Date(c.checkinTime) : null))
-    .filter((d: Date | null): d is Date => !!d && !isNaN(d.getTime()));
-
-  if (checkinTimes.length > 0) {
-    effectiveStart = new Date(Math.min(...checkinTimes.map(d => d.getTime())));
-  } else if (sessionData.date) {
-    const parsed = moment(`${sessionData.date} ${sessionData.startTime || ''}`.trim(), ['YYYY-MM-DD hh:mm A', 'YYYY-MM-DD HH:mm', 'YYYY-MM-DD']);
-    if (parsed.isValid()) {
-      effectiveStart = parsed.toDate();
-    }
-  }
-
-  const hoursBetween = (start: Date, end: Date) => {
-    const hrs = (end.getTime() - start.getTime()) / (1000 * 60 * 60);
-    return Math.max(0, Math.round(hrs * 100) / 100);
-  };
-
-  // Credit each checked-in employee
-  let employeesCredited = 0;
-  let totalEmployeeHours = 0;
-  for (const checkin of checkins) {
-    if (!checkin.employeeId) continue;
-    const checkinTime = checkin.checkinTime ? new Date(checkin.checkinTime) : effectiveStart;
-    const durationHours = hoursBetween(checkinTime, closeOutTime);
-
-    const employeeRef = db.collection('employees').doc(checkin.employeeId);
-    const trainingSessionData = {
-      date: sessionData.date,
-      location: checkin.location || sessionData.location,
-      topics: sessionData.topics || (sessionData.topic ? [sessionData.topic] : []),
-      trainer: sessionData.trainer,
-      length: durationHours,
-      status: 'completed',
-      sourceSessionId: sessionId,
-      sourceCheckinId: checkin.id,
-      createdAt: new Date().toISOString(),
-    };
-
-    await employeeRef.collection('trainingSessions').add(trainingSessionData);
-    await employeeRef.update({
-      totalHours: admin.firestore.FieldValue.increment(durationHours),
-      updatedAt: new Date().toISOString(),
-    });
-
-    employeesCredited++;
-    totalEmployeeHours += durationHours;
-  }
-
-  // Credit each trainer on the session
-  const trainerIds: string[] = Array.isArray(sessionData.trainer)
-    ? sessionData.trainer
-    : (sessionData.trainer ? [sessionData.trainer] : []);
-  const trainerDurationHours = hoursBetween(effectiveStart, closeOutTime);
-
-  let trainersCredited = 0;
-  for (const trainerId of trainerIds) {
-    const trainerRef = db.collection('employees').doc(trainerId);
-    const trainerDoc = await trainerRef.get();
-    if (!trainerDoc.exists) continue;
-
-    await trainerRef.collection('trainingSessionsLed').add({
-      date: sessionData.date,
-      location: sessionData.location,
-      topics: sessionData.topics || (sessionData.topic ? [sessionData.topic] : []),
-      length: trainerDurationHours,
-      employeeCount: employeesCredited,
-      sourceSessionId: sessionId,
-      createdAt: new Date().toISOString(),
-    });
-    await trainerRef.update({
-      totalHoursLed: admin.firestore.FieldValue.increment(trainerDurationHours),
-      updatedAt: new Date().toISOString(),
-    });
-
-    trainersCredited++;
-  }
-
-  await sessionRef.update({
-    status: 'completed',
-    closedAt: closeOutTime.toISOString(),
-    effectiveStartTime: effectiveStart.toISOString(),
-    creditsGranted: true,
-    employeesCredited,
-    updatedAt: new Date().toISOString(),
-  });
-
-  return {
-    employeesCredited,
-    totalEmployeeHours: Math.round(totalEmployeeHours * 100) / 100,
-    trainersCredited,
-    trainerDurationHours,
-  };
-}
 
 // Create a new training session (standalone, not tied to specific employee)
 router.post('/', requireRole(STAFF), async (req, res) => {
@@ -264,7 +139,7 @@ router.post('/from-sheet', requireRole(STAFF), async (req, res) => {
       return start.add(hrs, 'hours').toDate();
     })();
 
-    const result = await performCloseOut(sessionRef.id, closeOutTime);
+    const result = await performCloseOut(sessionRef.id, { closeOutTime });
 
     res.status(201).json({
       message: 'Session imported and closed out successfully',

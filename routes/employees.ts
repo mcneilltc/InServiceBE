@@ -13,12 +13,16 @@ const {
 } = require('../controllers/employeesController');
 
 // Self-service lookup controller (badge + firstName/lastName or legacy name lookup)
-import { lookupEmployee } from '../controllers/employeeSelfServiceController';
+import { lookupEmployee, getEmployeeDetailForManager } from '../controllers/employeeSelfServiceController';
 
 // Reads — supervisors and trainers both need the employee list/detail
 // (trainee pickers, OCR matching, hours tracking).
 router.get('/', requireRole(['supervisor', 'trainer']), getAllEmployees);
 router.get('/:id', requireRole(['supervisor', 'trainer']), getEmployeeById);
+
+// Manager-facing detail view (compliance/hours/certs/sessions) — supervisor only,
+// mirrors the self-service lookup response shape but keyed by employee ID.
+router.get('/:id/detail', requireRole(['supervisor']), getEmployeeDetailForManager);
 
 // Writes — supervisor only (Manage Employees).
 router.post('/', requireRole(['supervisor']), validate(employeeSchema), createEmployee);

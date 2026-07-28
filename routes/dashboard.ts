@@ -117,7 +117,9 @@ router.get('/stats', async (req: any, res) => {
     // With no homeSite given, a location-scoped supervisor still gets
     // clamped to their own site(s) by default (clampSitesToScope returns
     // their full allowed list rather than null in that case).
-    const clientRequestedHomeSites: string[] | null = homeSite ? [String(homeSite)] : null;
+    const clientRequestedHomeSites: string[] | null = homeSite
+      ? String(homeSite).split(',').map((s) => s.trim()).filter(Boolean)
+      : null;
     const requestedHomeSites = clampSitesToScope(req.user, clientRequestedHomeSites);
 
     // Calculate date range based on period

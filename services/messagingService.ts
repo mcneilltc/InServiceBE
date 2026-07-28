@@ -44,6 +44,18 @@ function managerMidMonthAlertTemplate(site: string, employeesZero: any[]) {
   `;
 }
 
-export { sendEmail, midMonthEmployeeTemplate, managerMidMonthAlertTemplate };
+function closeOutReminderTemplate(trainerName: string, session: any) {
+  const topics = (session.topics || []).join(', ') || 'the scheduled topics';
+  return `
+    <p>Hi ${trainerName || ''},</p>
+    <p>Your training session on <strong>${session.date}</strong> at <strong>${session.location}</strong>
+    (${topics}) is past its scheduled end time and hasn't been closed out yet.</p>
+    <p>Please close it out in UpSkilled so attendees get credited for their hours. If it isn't closed
+    out within 24 hours of the scheduled end time, it will be automatically closed using the session's
+    listed duration.</p>
+  `;
+}
+
+export { sendEmail, midMonthEmployeeTemplate, managerMidMonthAlertTemplate, closeOutReminderTemplate };
 
 export default { sendEmail };
