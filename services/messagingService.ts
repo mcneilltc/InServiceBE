@@ -25,6 +25,63 @@ async function sendEmail(to: string, subject: string, html: string) {
   return { ok: res.ok, status: res.status, body: json };
 }
 
+async function sendEmailWithProvider({
+  provider,
+  accessToken,
+  to,
+  subject,
+  html,
+}: {
+  provider: 'google' | 'microsoft' | 'yahoo' | string;
+  accessToken: string;
+  to: string;
+  subject: string;
+  html: string;
+}) {
+  if (!accessToken) {
+    return { ok: false, skipped: true, reason: 'missing_access_token' };
+  }
+
+  if (provider === 'microsoft') {
+    const res = await fetch('https://graph.microsoft.com/v1.0/me/sendMail', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        message: {
+          subject,
+          body: { contentType: 'HTML', content: html },
+          toRecipients: [{ emailAddress: { address: to } }],
+        },
+        saveToSentItems: true,
+      }),
+    });
+
+    const json = await res.json().catch(() => ({}));
+    return { ok: res.ok, status: res.status, body: json };
+  }
+
+  if (provider === 'google') {
+    const res = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        raw: Buffer.from(`To: ${to}\nSubject: ${subject}\nContent-Type: text/html; charset=utf-8\n\n${html}`).toString('base64'),
+      }),
+    });
+
+    const json = await res.json().catch(() => ({}));
+    return { ok: res.ok, status: res.status, body: json };
+  }
+
+  return { ok: false, skipped: true, reason: 'unsupported_provider' };
+}
+
 function midMonthEmployeeTemplate(employee: any, hours: number, upcoming: any[] = []) {
   const list = upcoming.map(s => `<li>${s.date} — ${s.topic} (${s.location || 'site'})</li>`).join('');
   return `
@@ -56,6 +113,6 @@ function closeOutReminderTemplate(trainerName: string, session: any) {
   `;
 }
 
-export { sendEmail, midMonthEmployeeTemplate, managerMidMonthAlertTemplate, closeOutReminderTemplate };
+export { sendEmail, sendEmailWithProvider, midMonthEmployeeTemplate, managerMidMonthAlertTemplate, closeOutReminderTemplate };
 
-export default { sendEmail };
+export default { sendEmail, sendEmailWithProvider };

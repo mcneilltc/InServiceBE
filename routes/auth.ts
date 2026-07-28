@@ -3,9 +3,11 @@ const express = require('express');
 const router = express.Router();
 const jwt = require('jsonwebtoken');
 const dns = require('dns').promises;
+const axios = require('axios');
 const { verifyGoogleToken, verifyMicrosoftToken, verifyYahooToken } = require('../utils');
 const { resolveRole } = require('../services/authService');
-const { COOKIE_OPTIONS, SESSION_MAX_AGE_SECONDS } = require('../middleware/requireRole');
+const { COOKIE_OPTIONS, SESSION_MAX_AGE_SECONDS, requireRole } = require('../middleware/requireRole');
+const { sendEmailWithProvider } = require('../services/messagingService');
 
 const getSessionSecret = () => process.env.SESSION_SECRET;
 
@@ -60,7 +62,13 @@ router.get('/detect-provider', async (req, res) => {
 // authorized — issues a signed session cookie. This is the only place a
 // session gets created; the email used for role lookup always comes from the
 // verified token payload, never from anything the client claims directly.
-async function completeLogin(res: any, email: string, name: string | null) {
+function sanitizeUserClaims(claims: any) {
+  const sanitized = { ...claims };
+  delete sanitized.accessToken;
+  return sanitized;
+}
+
+async function completeLogin(res: any, email: string, name: string | null, provider: string | null = null, accessToken: string | null = null) {
   const resolved = await resolveRole(email);
 
   if (!resolved.isWhitelisted) {
@@ -77,23 +85,37 @@ async function completeLogin(res: any, email: string, name: string | null) {
     supervisorScope: resolved.supervisorScope || null,
     supervisorLocations: resolved.supervisorLocations || [],
     employeeId: resolved.employeeId || null,
+    provider: provider || null,
+    accessToken: accessToken || null,
   };
 
   const token = jwt.sign(claims, getSessionSecret(), { expiresIn: SESSION_MAX_AGE_SECONDS });
   res.cookie('session', token, COOKIE_OPTIONS);
-  res.json({ isWhitelisted: true, user: claims });
+  res.json({ isWhitelisted: true, user: sanitizeUserClaims(claims) });
 }
 
 // POST /api/auth/google — body: { idToken }
 router.post('/google', async (req, res) => {
   try {
-    const { idToken } = req.body;
-    if (!idToken) {
-      return res.status(400).json({ message: 'idToken is required' });
+    const { idToken, accessToken } = req.body;
+    if (!idToken && !accessToken) {
+      return res.status(400).json({ message: 'idToken or accessToken is required' });
     }
 
-    const payload = await verifyGoogleToken(idToken);
-    await completeLogin(res, payload.email, payload.name || null);
+    let payload: any;
+    if (idToken) {
+      payload = await verifyGoogleToken(idToken);
+    } else {
+      const response = await axios.get('https://www.googleapis.com/oauth2/v3/userinfo', {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      payload = {
+        email: response.data.email,
+        name: response.data.name,
+      };
+    }
+
+    await completeLogin(res, payload.email, payload.name || null, 'google', accessToken || null);
   } catch (error: any) {
     console.error('Google login failed:', error);
     res.status(401).json({ message: 'Invalid Google credentials' });
@@ -109,7 +131,7 @@ router.post('/microsoft', async (req, res) => {
     }
 
     const profile = await verifyMicrosoftToken(accessToken);
-    await completeLogin(res, profile.email, profile.name || null);
+    await completeLogin(res, profile.email, profile.name || null, 'microsoft', accessToken);
   } catch (error: any) {
     console.error('Microsoft login failed:', error);
     res.status(401).json({ message: 'Invalid Microsoft credentials' });
@@ -125,7 +147,7 @@ router.post('/yahoo', async (req, res) => {
     }
 
     const profile = await verifyYahooToken(accessToken);
-    await completeLogin(res, profile.email, profile.name || null);
+    await completeLogin(res, profile.email, profile.name || null, 'yahoo', accessToken);
   } catch (error: any) {
     console.error('Yahoo login failed:', error);
     res.status(401).json({ message: 'Invalid Yahoo credentials' });
@@ -142,7 +164,7 @@ router.get('/session', (req, res) => {
   try {
     const payload = jwt.verify(token, getSessionSecret());
     const { iat, exp, ...user } = payload;
-    res.json({ user });
+    res.json({ user: sanitizeUserClaims(user) });
   } catch (error) {
     res.status(401).json({ message: 'Session expired or invalid' });
   }
@@ -152,6 +174,47 @@ router.get('/session', (req, res) => {
 router.post('/logout', (req, res) => {
   res.clearCookie('session', { ...COOKIE_OPTIONS, maxAge: undefined });
   res.json({ message: 'Logged out' });
+});
+
+// POST /api/auth/send-email
+// Expects an authenticated session cookie and a provider-scoped access token
+// (for example a Microsoft Graph access token obtained during the SSO flow).
+router.post('/send-email', requireRole(['supervisor', 'trainer']), async (req, res) => {
+  try {
+    const { to, subject, html, provider, accessToken } = req.body || {};
+    const user = req.user;
+
+    if (!user) {
+      return res.status(401).json({ message: 'Not authenticated' });
+    }
+
+    if (!to || !subject || !html) {
+      return res.status(400).json({ message: 'to, subject and html are required' });
+    }
+
+    const resolvedProvider = provider || user.provider || 'microsoft';
+    const resolvedAccessToken = accessToken || user.accessToken || '';
+
+    const result = await sendEmailWithProvider({
+      provider: resolvedProvider,
+      accessToken: resolvedAccessToken,
+      to,
+      subject,
+      html,
+    });
+
+    if (!result.ok) {
+      return res.status(502).json({
+        message: 'Failed to send email via provider',
+        details: result,
+      });
+    }
+
+    return res.json({ ok: true, result });
+  } catch (error: any) {
+    console.error('send-email failed:', error);
+    return res.status(500).json({ message: error.message || 'Failed to send email' });
+  }
 });
 
 export default router;
