@@ -39,6 +39,7 @@ import complianceRoutes from './routes/compliance';
 import employeeSelfServiceRoutes from './routes/employeeSelfService';
 import certificationRoutes from './routes/certifications';
 import siteRoutes from './routes/sites';
+import trainingAnalyticsRoutes from './routes/trainingAnalytics';
 import { runSessionAutomationCheck } from './services/sessionAutomation';
 const { requireRole } = require('./middleware/requireRole');
 
@@ -59,6 +60,7 @@ app.use('/api/compliance', SUPERVISOR, complianceRoutes);
 app.use('/api/employee', employeeSelfServiceRoutes);
 app.use('/api/certifications', certificationRoutes);
 app.use('/api/sites', siteRoutes);
+app.use('/api/training-analytics', SUPERVISOR, trainingAnalyticsRoutes);
 
 app.get('/', (req, res) => {
   res.send('Training Management Application Backend is running!');

@@ -46,85 +46,99 @@ async function getEmployeeHoursForMonth(employeeId: string, monthStart: Date, mo
   return Math.round(total * 10) / 10; // round to 1dp
 }
 
+// Computes per-employee compliance for one calendar month and groups it by
+// home site. Shared by getComplianceStatus (this file) and the training
+// analytics "compliance outlook" endpoint's month mode, so the two never
+// drift on how compliance-by-site is computed.
+export async function computeComplianceBySiteForMonth(monthMoment: moment.Moment): Promise<{
+  employees: EmployeeCompliance[];
+  bySite: Record<string, SiteSummary>;
+  overall: SiteSummary;
+}> {
+  const monthStart = monthMoment.clone().startOf('month').toDate();
+  const monthEnd = monthMoment.clone().endOf('month').toDate();
+
+  // Fetch all active employees
+  const employeesSnap = await db.collection('employees').where('isActive', '==', true).get();
+
+  const employees: EmployeeCompliance[] = [];
+
+  await Promise.all(employeesSnap.docs.map(async (doc: any) => {
+    const data = doc.data();
+    const hours = await getEmployeeHoursForMonth(doc.id, monthStart, monthEnd);
+
+    let status: EmployeeCompliance['status'];
+    if (hours >= MONTHLY_THRESHOLD)       status = 'compliant';
+    else if (hours >= MIDMONTH_THRESHOLD) status = 'partial';
+    else if (hours > 0)                   status = 'at_risk';
+    else                                  status = 'zero';
+
+    employees.push({
+      id: doc.id,
+      name: data.name || 'Unknown',
+      email: data.email || '',
+      location: data.homeLocation || (data.locations && data.locations[0]) || data.location || 'Unknown',
+      hoursThisMonth: hours,
+      status,
+      hoursNeededByMidMonth: Math.max(0, MIDMONTH_THRESHOLD - hours),
+      hoursNeededByEndOfMonth: Math.max(0, MONTHLY_THRESHOLD - hours),
+    });
+  }));
+
+  // Group by site
+  const bySite: Record<string, SiteSummary> = {};
+  employees.forEach(emp => {
+    const loc = emp.location;
+    if (!bySite[loc]) {
+      bySite[loc] = { total: 0, compliant: 0, partial: 0, atRisk: 0, zero: 0, percentCompliant: 0 };
+    }
+    const s = bySite[loc];
+    s.total++;
+    if (emp.status === 'compliant')  s.compliant++;
+    else if (emp.status === 'partial') s.partial++;
+    else if (emp.status === 'at_risk') s.atRisk++;
+    else s.zero++;
+  });
+  Object.values(bySite).forEach(s => {
+    s.percentCompliant = s.total > 0 ? Math.round((s.compliant / s.total) * 100) : 0;
+  });
+
+  const compliantCount = employees.filter(e => e.status === 'compliant').length;
+  const overall: SiteSummary = {
+    total: employees.length,
+    compliant: compliantCount,
+    partial: employees.filter(e => e.status === 'partial').length,
+    atRisk: employees.filter(e => e.status === 'at_risk').length,
+    zero: employees.filter(e => e.status === 'zero').length,
+    percentCompliant: employees.length > 0 ? Math.round((compliantCount / employees.length) * 100) : 0,
+  };
+
+  return { employees, bySite, overall };
+}
+
 export const getComplianceStatus = async (req: Request, res: Response, next: NextFunction) => {
   try {
     // Accept ?month=YYYY-MM, default to current month
     const monthParam = req.query.month as string;
     const monthMoment = monthParam ? moment(monthParam, 'YYYY-MM') : moment();
 
-    const monthStart  = monthMoment.clone().startOf('month').toDate();
-    const monthEnd    = monthMoment.clone().endOf('month').toDate();
     const midMonth    = monthMoment.clone().date(15).endOf('day').toDate();
     const now         = new Date();
     const isMidMonthPassed = now > midMonth;
 
-    // Fetch all active employees
-    const employeesSnap = await db.collection('employees').where('isActive', '==', true).get();
-
-    const employees: EmployeeCompliance[] = [];
-
-    await Promise.all(employeesSnap.docs.map(async (doc: any) => {
-      const data = doc.data();
-      const hours = await getEmployeeHoursForMonth(doc.id, monthStart, monthEnd);
-
-      let status: EmployeeCompliance['status'];
-      if (hours >= MONTHLY_THRESHOLD)       status = 'compliant';
-      else if (hours >= MIDMONTH_THRESHOLD) status = 'partial';
-      else if (hours > 0)                   status = 'at_risk';
-      else                                  status = 'zero';
-
-      employees.push({
-        id: doc.id,
-        name: data.name || 'Unknown',
-        email: data.email || '',
-        location: data.homeLocation || (data.locations && data.locations[0]) || data.location || 'Unknown',
-        hoursThisMonth: hours,
-        status,
-        hoursNeededByMidMonth: Math.max(0, MIDMONTH_THRESHOLD - hours),
-        hoursNeededByEndOfMonth: Math.max(0, MONTHLY_THRESHOLD - hours),
-      });
-    }));
-
-    // Group by site
-    const sites: Record<string, SiteSummary> = {};
-    employees.forEach(emp => {
-      const loc = emp.location;
-      if (!sites[loc]) {
-        sites[loc] = { total: 0, compliant: 0, partial: 0, atRisk: 0, zero: 0, percentCompliant: 0 };
-      }
-      const s = sites[loc];
-      s.total++;
-      if (emp.status === 'compliant')  s.compliant++;
-      else if (emp.status === 'partial') s.partial++;
-      else if (emp.status === 'at_risk') s.atRisk++;
-      else s.zero++;
-    });
-    Object.values(sites).forEach(s => {
-      s.percentCompliant = s.total > 0 ? Math.round((s.compliant / s.total) * 100) : 0;
-    });
+    const { employees, bySite: sites, overall } = await computeComplianceBySiteForMonth(monthMoment);
 
     // Alerts
     const midMonthAlerts  = employees.filter(e => e.status === 'zero');     // 0 hrs — manager alert
     const needsNotice     = employees.filter(e => e.status === 'at_risk' || e.status === 'zero'); // < 2 hrs
     const endOfMonthRisk  = employees.filter(e => e.status !== 'compliant'); // < 4 hrs
 
-    // Overall stats
-    const total = employees.length;
-    const compliantCount = employees.filter(e => e.status === 'compliant').length;
-
     res.json({
       month: monthMoment.format('MMMM YYYY'),
       monthKey: monthMoment.format('YYYY-MM'),
       isMidMonthPassed,
       thresholds: { midMonth: MIDMONTH_THRESHOLD, endOfMonth: MONTHLY_THRESHOLD },
-      overall: {
-        total,
-        compliant: compliantCount,
-        partial: employees.filter(e => e.status === 'partial').length,
-        atRisk: employees.filter(e => e.status === 'at_risk').length,
-        zero: employees.filter(e => e.status === 'zero').length,
-        percentCompliant: total > 0 ? Math.round((compliantCount / total) * 100) : 0,
-      },
+      overall,
       bySite: sites,
       alerts: {
         midMonth: midMonthAlerts,     // employees with 0 hrs (manager alert)
