@@ -5,7 +5,6 @@
 require('dotenv').config();
 
 const express = require('express');
-const bodyParser = require('body-parser');
 const cors = require('cors');
 const cookieParser = require('cookie-parser');
 const errorHandler = require('./middleware/errorHandler');
@@ -25,8 +24,8 @@ app.use(cookieParser());
 // signature against the exact bytes WIW signed (by the time a handler sees
 // req.body it's already been parsed, and the original bytes are gone).
 // Harmless for every other route, which never reads req.rawBody.
-app.use(bodyParser.json({ verify: (req: any, res, buf) => { req.rawBody = buf; } }));
-app.use(bodyParser.urlencoded({ extended: true })); // Parse URL-encoded bodies
+app.use(express.json({ verify: (req: any, res: any, buf: Buffer) => { req.rawBody = buf; } }));
+app.use(express.urlencoded({ extended: true })); // Parse URL-encoded bodies
 
 // Import your API routes here (will be created in the next steps)
 import employeeRoutes from './routes/employees';
