@@ -15,8 +15,14 @@ if (!admin.apps.length) {
       admin.initializeApp({ projectId, storageBucket: `${projectId}.appspot.com` });
       console.log(`Firebase Admin initialized against Firestore emulator at ${process.env.FIRESTORE_EMULATOR_HOST}`);
     } else {
-      const serviceAccountPath = process.env.FIREBASE_SERVICE_ACCOUNT;
-      const serviceAccount = JSON.parse(fs.readFileSync(serviceAccountPath, 'utf8')); // Read and parse the file
+      // Serverless platforms (Vercel, etc.) have no persistent filesystem to read a
+      // credentials file from, so the service account there must be the full JSON
+      // pasted directly into an env var instead of a file path. Local dev keeps
+      // using FIREBASE_SERVICE_ACCOUNT (a file path) unchanged below.
+      const serviceAccount = process.env.FIREBASE_SERVICE_ACCOUNT_JSON
+        ? JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON)
+        : JSON.parse(fs.readFileSync(process.env.FIREBASE_SERVICE_ACCOUNT, 'utf8'));
+
       admin.initializeApp({
         credential: admin.credential.cert(serviceAccount),
         databaseURL: process.env.FIREBASE_DATABASE_URL,
