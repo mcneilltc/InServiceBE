@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { GoogleGenerativeAI } from '@google/generative-ai';
-import { db, bucket } from '../config/firebase';
+import { db, getBucket } from '../config/firebase';
 import moment from 'moment';
 import sharp from 'sharp';
 import { randomUUID } from 'crypto';
@@ -43,7 +43,7 @@ async function persistSheetImages(files: Express.Multer.File[]): Promise<string[
     try {
       const ext = (file.mimetype.split('/')[1] || 'jpg').replace('jpeg', 'jpg');
       const path = `sign-in-sheets/${moment().format('YYYY/MM')}/${randomUUID()}.${ext}`;
-      const blob = bucket.file(path);
+      const blob = getBucket().file(path);
       await blob.save(file.buffer, { contentType: file.mimetype });
       const [url] = await blob.getSignedUrl({ action: 'read', expires: '01-01-2100' });
       urls.push(url);
