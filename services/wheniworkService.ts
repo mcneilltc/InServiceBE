@@ -1,10 +1,23 @@
 import { db } from '../config/firebase';
 import { assignShiftToUser } from './wheniworkClient';
 
-const DEFAULT_INSERVICE_KEYWORD = '[Inservice]';
+const DEFAULT_INSERVICE_KEYWORD = 'inservice';
 
-function getInserviceKeyword(): string {
-  return process.env.WHENIWORK_INSERVICE_KEYWORD || DEFAULT_INSERVICE_KEYWORD;
+// WHENIWORK_INSERVICE_KEYWORD may hold several comma-separated variants
+// (e.g. "inservice,in-service,IST") for words that aren't just spacing/casing
+// differences of the same term. Matching itself is separator-agnostic (see
+// normalize() below), so a single "inservice" already covers "Inservice",
+// "in-service", and "in service" without needing to list every variant here.
+function getInserviceKeywords(): string[] {
+  const raw = process.env.WHENIWORK_INSERVICE_KEYWORD || DEFAULT_INSERVICE_KEYWORD;
+  return raw.split(',').map((k) => k.trim()).filter(Boolean);
+}
+
+// Strips hyphens/whitespace and lowercases, so "In-Service", "in service",
+// and "inservice" all normalize to the same string before comparing —
+// letting one configured keyword match every spacing/casing variant of it.
+function normalize(text: string): string {
+  return text.toLowerCase().replace(/[-\s]/g, '');
 }
 
 // Single shared keyword-match function — every place that needs to decide
@@ -12,7 +25,8 @@ function getInserviceKeyword(): string {
 // convention only lives in one place.
 function isInserviceNotes(notes: string | null | undefined): boolean {
   if (!notes) return false;
-  return notes.toLowerCase().includes(getInserviceKeyword().toLowerCase());
+  const normalizedNotes = normalize(notes);
+  return getInserviceKeywords().some((keyword) => normalizedNotes.includes(normalize(keyword)));
 }
 
 // Looks up the local employee linked to a WIW user (set via the backfill

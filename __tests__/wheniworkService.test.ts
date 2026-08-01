@@ -42,6 +42,14 @@ describe('isInserviceNotes', () => {
     expect(isInserviceNotes('inservicing the machines today')).toBe(false);
   });
 
+  it('matches every hyphen/space/casing variant of the keyword', () => {
+    expect(isInserviceNotes('Please cover this in-service shift')).toBe(true);
+    expect(isInserviceNotes('Please cover this In-Service shift')).toBe(true);
+    expect(isInserviceNotes('Please cover this in service shift')).toBe(true);
+    expect(isInserviceNotes('Please cover this In Service shift')).toBe(true);
+    expect(isInserviceNotes('Please cover this Inservice shift')).toBe(true);
+  });
+
   it('returns false for null/undefined/empty notes', () => {
     expect(isInserviceNotes(null)).toBe(false);
     expect(isInserviceNotes(undefined)).toBe(false);
