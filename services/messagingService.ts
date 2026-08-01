@@ -113,6 +113,15 @@ function closeOutReminderTemplate(trainerName: string, session: any) {
   `;
 }
 
-export { sendEmail, sendEmailWithProvider, midMonthEmployeeTemplate, managerMidMonthAlertTemplate, closeOutReminderTemplate };
+function employeeShiftLoginInviteTemplate(employee: any, setPasswordUrl: string) {
+  return `
+    <p>Hi ${employee.name || ''},</p>
+    <p>You can now pick up available inservice shifts online. Set your password to get started:</p>
+    <p><a href="${setPasswordUrl}">${setPasswordUrl}</a></p>
+    <p>This link expires in 24 hours.</p>
+  `;
+}
+
+export { sendEmail, sendEmailWithProvider, midMonthEmployeeTemplate, managerMidMonthAlertTemplate, closeOutReminderTemplate, employeeShiftLoginInviteTemplate };
 
 export default { sendEmail, sendEmailWithProvider };

@@ -18,3 +18,20 @@ export function authCookie(overrides: Record<string, any> = {}): string {
   const token = jwt.sign(claims, process.env.SESSION_SECRET, { expiresIn: '1h' });
   return `session=${token}`;
 }
+
+// A signed session cookie for the 'employee' role (shift pickup), mirroring
+// authCookie() above but for the shape employeeAuth login issues.
+export function employeeAuthCookie(overrides: Record<string, any> = {}): string {
+  const claims = {
+    email: 'test-employee@example.com',
+    name: 'Test Employee',
+    role: 'employee',
+    employeeId: 'employee-1',
+    wheniworkUserId: 'wiw-user-1',
+    provider: 'password',
+    accessToken: null,
+    ...overrides,
+  };
+  const token = jwt.sign(claims, process.env.SESSION_SECRET, { expiresIn: '1h' });
+  return `session=${token}`;
+}

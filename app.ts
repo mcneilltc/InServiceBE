@@ -20,7 +20,12 @@ app.use(cors({
   credentials: true,
 }));
 app.use(cookieParser());
-app.use(bodyParser.json());
+// Captures the raw request bytes onto req.rawBody alongside the normal JSON
+// parse — needed so the When I Work webhook route can verify an HMAC
+// signature against the exact bytes WIW signed (by the time a handler sees
+// req.body it's already been parsed, and the original bytes are gone).
+// Harmless for every other route, which never reads req.rawBody.
+app.use(bodyParser.json({ verify: (req: any, res, buf) => { req.rawBody = buf; } }));
 app.use(bodyParser.urlencoded({ extended: true })); // Parse URL-encoded bodies
 
 // Import your API routes here (will be created in the next steps)
@@ -40,6 +45,9 @@ import employeeSelfServiceRoutes from './routes/employeeSelfService';
 import certificationRoutes from './routes/certifications';
 import siteRoutes from './routes/sites';
 import trainingAnalyticsRoutes from './routes/trainingAnalytics';
+import wheniworkRoutes from './routes/wheniwork';
+import shiftRoutes from './routes/shifts';
+import employeeAuthRoutes from './routes/employeeAuth';
 import incentiveRoutes from './routes/incentives';
 import { runSessionAutomationCheck } from './services/sessionAutomation';
 const { requireRole } = require('./middleware/requireRole');
@@ -62,6 +70,11 @@ app.use('/api/employee', employeeSelfServiceRoutes);
 app.use('/api/certifications', certificationRoutes);
 app.use('/api/sites', siteRoutes);
 app.use('/api/training-analytics', SUPERVISOR, trainingAnalyticsRoutes);
+// No requireRole gate here — When I Work calls this directly; the route
+// verifies an HMAC signature internally instead (see routes/wheniwork.ts).
+app.use('/api/wheniwork', wheniworkRoutes);
+app.use('/api/shifts', shiftRoutes);
+app.use('/api/auth/employee', employeeAuthRoutes);
 app.use('/api/incentives', incentiveRoutes);
 
 app.get('/', (req, res) => {

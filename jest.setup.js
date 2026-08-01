@@ -2,6 +2,9 @@
 // sign/verify against the same value, independent of the real .env file.
 process.env.SESSION_SECRET = 'test-session-secret';
 
+// Fixed test-only secret for employee invite/set-password tokens (see
+// services/employeeAuthService.ts), independent of the real .env file.
+process.env.EMPLOYEE_INVITE_TOKEN_SECRET = 'test-employee-invite-secret';
 // Route all Firestore access in tests to the local emulator (started via
 // `firebase emulators:exec` in the npm test scripts) instead of the real
 // "inservicetracker" production project. Without this, a test's cleanup logic
