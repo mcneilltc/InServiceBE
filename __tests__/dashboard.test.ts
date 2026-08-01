@@ -1,6 +1,6 @@
 export {};
 const request = require('supertest');
-const app = require('../app');
+const app = require('../app').default;
 const { db } = require('../config/firebase');
 const { authCookie } = require('./testHelpers');
 

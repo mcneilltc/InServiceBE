@@ -48,6 +48,7 @@ import trainingAnalyticsRoutes from './routes/trainingAnalytics';
 import wheniworkRoutes from './routes/wheniwork';
 import shiftRoutes from './routes/shifts';
 import employeeAuthRoutes from './routes/employeeAuth';
+import incentiveRoutes from './routes/incentives';
 import { runSessionAutomationCheck } from './services/sessionAutomation';
 const { requireRole } = require('./middleware/requireRole');
 
@@ -74,10 +75,33 @@ app.use('/api/training-analytics', SUPERVISOR, trainingAnalyticsRoutes);
 app.use('/api/wheniwork', wheniworkRoutes);
 app.use('/api/shifts', shiftRoutes);
 app.use('/api/auth/employee', employeeAuthRoutes);
+app.use('/api/incentives', incentiveRoutes);
 
 app.get('/', (req, res) => {
   res.send('Training Management Application Backend is running!');
 });
+
+// TEMPORARY dev-only login shortcut for manual browser verification — remove before committing.
+if (process.env.NODE_ENV !== 'production') {
+  app.get('/__dev_login', async (req: any, res: any) => {
+    const jwt = require('jsonwebtoken');
+    const { resolveRole } = require('./services/authService');
+    const { COOKIE_OPTIONS, SESSION_MAX_AGE_SECONDS } = require('./middleware/requireRole');
+    const email = req.query.email || 'tiquilamcneill@gmail.com';
+    const resolved = await resolveRole(email);
+    const claims = {
+      email,
+      name: resolved.name || 'Dev Test',
+      role: resolved.role,
+      supervisorScope: resolved.supervisorScope || null,
+      supervisorLocations: resolved.supervisorLocations || [],
+      employeeId: resolved.employeeId || null,
+    };
+    const token = jwt.sign(claims, process.env.SESSION_SECRET, { expiresIn: SESSION_MAX_AGE_SECONDS });
+    res.cookie('session', token, COOKIE_OPTIONS);
+    res.redirect(process.env.FRONTEND_URL || 'http://localhost:3000');
+  });
+}
 
 // Error Handling Middleware (must be exactly after all routes)
 app.use(errorHandler);
