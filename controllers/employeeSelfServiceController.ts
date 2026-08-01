@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { db } from '../config/firebase';
 import moment from 'moment';
+import { getEmployeeIncentiveSummary } from '../services/incentiveService';
 
 const MIDMONTH_THRESHOLD = 2;
 const MONTHLY_THRESHOLD = 4;
@@ -186,11 +187,13 @@ export const lookupEmployee = async (req: Request, res: Response, next: NextFunc
 
     const rawSessions = await getThisMonthRawSessions(employeeId);
     const { sessions, totalHoursThisMonth } = await resolveSessionsWithTrainerNames(rawSessions);
+    const incentive = await getEmployeeIncentiveSummary(employeeId);
 
     res.json({
       employee: shapeEmployeeForResponse(employeeId, employeeData, firstName, lastName),
       compliance: computeCompliance(totalHoursThisMonth),
       sessions,
+      incentive,
     });
   } catch (error) {
     next(error);
@@ -214,11 +217,13 @@ export const getEmployeeDetailForManager = async (req: Request, res: Response, n
 
     const rawSessions = await getThisMonthRawSessions(employeeId);
     const { sessions, totalHoursThisMonth } = await resolveSessionsWithTrainerNames(rawSessions);
+    const incentive = await getEmployeeIncentiveSummary(employeeId);
 
     res.json({
       employee: shapeEmployeeForResponse(employeeId, employeeData),
       compliance: computeCompliance(totalHoursThisMonth),
       sessions,
+      incentive,
     });
   } catch (error) {
     next(error);

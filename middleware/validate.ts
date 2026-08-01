@@ -11,7 +11,7 @@ const validate = (schema) => async (req, res, next) => {
     return res.status(400).json({
       error: {
         message: "Validation Error",
-        details: error.errors
+        details: error.issues
       }
     });
   }

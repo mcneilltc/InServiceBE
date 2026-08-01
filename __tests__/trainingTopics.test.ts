@@ -57,7 +57,7 @@ describe('Training Topics API', () => {
       const response = await request(app)
         .post('/api/training-topics')
         .set('Cookie', authCookie())
-        .send({});
+        .send({ topicName: '' });
 
       expect(response.status).toBe(400);
       expect(response.body).toHaveProperty('error');
