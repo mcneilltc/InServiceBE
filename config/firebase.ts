@@ -40,7 +40,6 @@ if (!admin.apps.length) {
 }
 
 const db = admin.firestore();
-const bucket = admin.storage().bucket();
 
 // Optional: Add error handling for Firestore operations
 db.settings({
@@ -48,4 +47,16 @@ db.settings({
   ignoreUndefinedProperties: true
 });
 
-export { admin, db, bucket };
+// Lazy — importing @google-cloud/storage eagerly (i.e. at module load, which
+// happens on every request since nearly every route imports this file) has
+// twice now crashed the whole app in Vercel's environment: once because
+// Cloud Storage isn't enabled for this Firebase project yet, and again
+// because Vercel's dependency bundler failed to trace one of that package's
+// own transitive deps ("mime"). Deferring the require to first actual use
+// means only the one feature that needs Storage (OCR image persistence) is
+// at risk, and it already fails open around this call.
+function getBucket() {
+  return admin.storage().bucket();
+}
+
+export { admin, db, getBucket };
