@@ -9,3 +9,8 @@ inservicetracker-7489d7704556.json
 node_modules/
 # Ignore yarn.lock
 yarn.lock
+
+# Firebase emulator debug logs
+firestore-debug.log
+firebase-debug.log
+.firebase/

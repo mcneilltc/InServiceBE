@@ -1,0 +1,11 @@
+rules_version = '2';
+
+// Local emulator only — never deployed. Wide open so tests can read/write freely
+// against the emulator without needing real auth tokens.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if true;
+    }
+  }
+}

@@ -4,7 +4,13 @@ const router = express.Router();
 const { db } = require('../config/firebase');
 const { requireRole } = require('../middleware/requireRole');
 const { clampSitesToScope } = require('../services/authService');
+const moment = require('moment');
 import { selfCheckin } from '../controllers/checkinController';
+
+// Self check-in via the electronic form closes this long after the session's
+// scheduled start — after that, a trainer must add a late employee manually
+// (the { employeeId } path below), since the trainer is vouching for them.
+const SELF_CHECKIN_GRACE_MINUTES = 1;
 
 // POST /api/checkin
 // Two ways to identify the employee:
@@ -28,6 +34,24 @@ router.post('/', async (req, res) => {
     const sessionData = sessionDoc.data();
     if (sessionData.status === 'completed') {
       return res.status(400).json({ message: 'This training session has already been closed out.' });
+    }
+
+    // Only the self check-in path (no trusted employeeId) is time-gated —
+    // a trainer manually adding a late employee is unaffected.
+    if (!employeeId && sessionData.startTime) {
+      const scheduledStart = moment(
+        `${sessionData.date} ${sessionData.startTime}`.trim(),
+        ['YYYY-MM-DD hh:mm A', 'YYYY-MM-DD HH:mm', 'YYYY-MM-DD'],
+        true
+      );
+      if (scheduledStart.isValid()) {
+        const cutoff = scheduledStart.clone().add(SELF_CHECKIN_GRACE_MINUTES, 'minutes');
+        if (moment().isAfter(cutoff)) {
+          return res.status(403).json({
+            message: `Self check-in has closed — it's only available within ${SELF_CHECKIN_GRACE_MINUTES} minute(s) of the session's start time. Ask your trainer to add you manually.`,
+          });
+        }
+      }
     }
 
     let employeeDoc;
