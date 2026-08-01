@@ -1,0 +1,11 @@
+{
+  "functions": {
+    "app.ts": {
+      "includeFiles": [
+        "node_modules/zod/**",
+        "node_modules/mime/**",
+        "node_modules/@google-cloud/storage/**"
+      ]
+    }
+  }
+}
