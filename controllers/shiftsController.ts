@@ -1,4 +1,3 @@
-export {};
 const { db } = require('../config/firebase');
 const { pickUpShift, ShiftPickupError } = require('../services/wheniworkService');
 
@@ -41,4 +40,4 @@ async function pickUpShiftHandler(req: any, res: any, next: any) {
   }
 }
 
-module.exports = { listAvailableInserviceShifts, pickUpShift: pickUpShiftHandler };
+export { listAvailableInserviceShifts, pickUpShiftHandler as pickUpShift };

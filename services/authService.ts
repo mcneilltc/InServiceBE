@@ -1,4 +1,3 @@
-export {};
 const { db } = require('../config/firebase');
 
 // Resolves a verified email to a role. Precedence: a supervisor (isSupervisor
@@ -67,4 +66,4 @@ function clampSitesToScope(user: any, requestedSites: string[] | null): string[]
   return requestedSites.filter((s) => allowed.includes(s));
 }
 
-module.exports = { resolveRole, clampSitesToScope };
+export { resolveRole, clampSitesToScope };

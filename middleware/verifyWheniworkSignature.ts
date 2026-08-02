@@ -1,4 +1,3 @@
-export {};
 const crypto = require('crypto');
 
 // Verifies an HMAC signature When I Work sends on webhook requests, computed
@@ -46,4 +45,4 @@ function verifyWheniworkSignature(req: any, res: any, next: any) {
   next();
 }
 
-module.exports = { verifyWheniworkSignature };
+export { verifyWheniworkSignature };

@@ -1,4 +1,3 @@
-export {};
 const { upsertShiftFromWebhookEvent } = require('../services/wheniworkService');
 
 // Handles an inbound When I Work webhook event. Responds 200 quickly and
@@ -22,4 +21,4 @@ async function handleWheniworkWebhook(req: any, res: any, next: any) {
   }
 }
 
-module.exports = { handleWheniworkWebhook };
+export { handleWheniworkWebhook };

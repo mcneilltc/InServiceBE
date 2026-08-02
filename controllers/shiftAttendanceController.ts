@@ -1,4 +1,3 @@
-export {};
 const { getShiftAttendanceReport } = require('../services/shiftAttendanceService');
 
 // GET /api/shifts/attendance?onlyMissed=false — supervisor only.
@@ -12,4 +11,4 @@ async function getAttendanceReport(req: any, res: any, next: any) {
   }
 }
 
-module.exports = { getAttendanceReport };
+export { getAttendanceReport };

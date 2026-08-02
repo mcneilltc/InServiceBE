@@ -1,4 +1,3 @@
-export {};
 const jwt = require('jsonwebtoken');
 
 // Read lazily (at call time, not module-load time) — env vars must already be
@@ -57,4 +56,4 @@ const requireRole = (allowedRoles: string[]) => (req: any, res: any, next: any) 
   next();
 };
 
-module.exports = { requireRole, COOKIE_OPTIONS, SESSION_MAX_AGE_SECONDS };
+export { requireRole, COOKIE_OPTIONS, SESSION_MAX_AGE_SECONDS };
