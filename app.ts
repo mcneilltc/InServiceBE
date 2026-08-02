@@ -10,7 +10,11 @@ const cookieParser = require('cookie-parser');
 const errorHandler = require('./middleware/errorHandler');
 
 const app = express();
-const port = 5001; // Or any other port
+// Render (and most PaaS hosts) inject their own PORT env var and route
+// traffic based on what the process actually binds to — a hardcoded port
+// would silently fail to receive traffic there. Falls back to 5001 for
+// local dev, where nothing sets PORT.
+const port = process.env.PORT || 5001;
 
 // credentials:true + an explicit origin is required for the httpOnly session
 // cookie to ride along on cross-origin requests from the frontend.
