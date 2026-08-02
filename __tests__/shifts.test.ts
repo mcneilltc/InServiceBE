@@ -16,7 +16,10 @@ jest.mock('../services/wheniworkClient', () => ({
 
 const { assignShiftToUser } = require('../services/wheniworkClient');
 
-describe('GET /api/shifts', () => {
+// Skipped: routes/shifts.ts is commented out of app.ts (When I Work
+// integration pulled from production for now — see app.ts). Re-enable these
+// suites together with that route mount.
+describe.skip('GET /api/shifts', () => {
   beforeEach(() => {
     jest.clearAllMocks();
   });
@@ -58,7 +61,7 @@ describe('GET /api/shifts', () => {
   });
 });
 
-describe('POST /api/shifts/:id/pickup', () => {
+describe.skip('POST /api/shifts/:id/pickup', () => {
   // A tiny in-memory Firestore-transaction fake: runTransaction callbacks are
   // queued and run strictly in call order (mirroring the atomicity guarantee
   // real Firestore transactions provide), so two "concurrent" pickup

@@ -48,9 +48,13 @@ import employeeSelfServiceRoutes from './routes/employeeSelfService';
 import certificationRoutes from './routes/certifications';
 import siteRoutes from './routes/sites';
 import trainingAnalyticsRoutes from './routes/trainingAnalytics';
-import wheniworkRoutes from './routes/wheniwork';
-import shiftRoutes from './routes/shifts';
-import employeeAuthRoutes from './routes/employeeAuth';
+// When I Work integration — commented out of production for now (real WIW
+// credential verification isn't implemented yet; see routes/employeeAuth.ts
+// and services/wheniworkClient.ts for where that work left off). Uncomment
+// these three imports and their app.use() calls below to re-enable.
+// import wheniworkRoutes from './routes/wheniwork';
+// import shiftRoutes from './routes/shifts';
+// import employeeAuthRoutes from './routes/employeeAuth';
 import incentiveRoutes from './routes/incentives';
 import { runSessionAutomationCheck } from './services/sessionAutomation';
 const { requireRole } = require('./middleware/requireRole');
@@ -73,11 +77,12 @@ app.use('/api/employee', employeeSelfServiceRoutes);
 app.use('/api/certifications', certificationRoutes);
 app.use('/api/sites', siteRoutes);
 app.use('/api/training-analytics', SUPERVISOR, trainingAnalyticsRoutes);
-// No requireRole gate here — When I Work calls this directly; the route
-// verifies an HMAC signature internally instead (see routes/wheniwork.ts).
-app.use('/api/wheniwork', wheniworkRoutes);
-app.use('/api/shifts', shiftRoutes);
-app.use('/api/auth/employee', employeeAuthRoutes);
+// When I Work integration — commented out of production for now (see note
+// by the imports above). Uncomment to re-enable the webhook receiver,
+// employee shift-pickup routes, and employee login/invite routes.
+// app.use('/api/wheniwork', wheniworkRoutes);
+// app.use('/api/shifts', shiftRoutes);
+// app.use('/api/auth/employee', employeeAuthRoutes);
 app.use('/api/incentives', incentiveRoutes);
 
 app.get('/', (req, res) => {
