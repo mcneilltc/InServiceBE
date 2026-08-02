@@ -18,7 +18,13 @@ jest.mock('../services/messagingService', () => ({
 
 const { sendEmail } = require('../services/messagingService');
 
-describe('POST /api/auth/employee/login', () => {
+// Skipped: routes/employeeAuth.ts is commented out of app.ts (When I Work
+// integration pulled from production for now — see app.ts). Re-enable these
+// suites together with that route mount. Note: the local-password login
+// design tested here is also being reconsidered in favor of verifying real
+// When I Work credentials directly — see conversation notes / follow-up work
+// before just re-enabling as-is.
+describe.skip('POST /api/auth/employee/login', () => {
   beforeEach(() => {
     jest.clearAllMocks();
   });
@@ -86,7 +92,7 @@ describe('POST /api/auth/employee/login', () => {
   });
 });
 
-describe('POST /api/auth/employee/invite', () => {
+describe.skip('POST /api/auth/employee/invite', () => {
   beforeEach(() => {
     jest.clearAllMocks();
   });
@@ -133,7 +139,7 @@ describe('POST /api/auth/employee/invite', () => {
   });
 });
 
-describe('POST /api/auth/employee/set-password', () => {
+describe.skip('POST /api/auth/employee/set-password', () => {
   beforeEach(() => {
     jest.clearAllMocks();
   });

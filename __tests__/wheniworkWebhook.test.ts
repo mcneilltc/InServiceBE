@@ -15,7 +15,10 @@ function sign(payload: any): string {
   return crypto.createHmac('sha256', WEBHOOK_SECRET).update(raw).digest('hex');
 }
 
-describe('POST /api/wheniwork/webhook', () => {
+// Skipped: routes/wheniwork.ts is commented out of app.ts (When I Work
+// integration pulled from production for now — see app.ts). Re-enable this
+// suite together with that route mount.
+describe.skip('POST /api/wheniwork/webhook', () => {
   const ORIGINAL_ENV = process.env;
 
   beforeEach(() => {

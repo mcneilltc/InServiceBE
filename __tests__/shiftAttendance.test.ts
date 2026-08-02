@@ -6,7 +6,10 @@ const moment = require('moment');
 const { authCookie } = require('./testHelpers');
 
 // Runs against the local Firestore emulator (see jest.setup.js).
-describe('GET /api/shifts/attendance', () => {
+// Skipped: routes/shifts.ts (including this /attendance sub-route) is
+// commented out of app.ts — When I Work integration pulled from production
+// for now. Re-enable together with that route mount.
+describe.skip('GET /api/shifts/attendance', () => {
   const createdEmployeeIds: string[] = [];
   const createdShiftIds: string[] = [];
   const createdCheckinIds: string[] = [];
