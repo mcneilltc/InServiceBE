@@ -1,9 +1,9 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "installCommand": "npm install --omit=dev",
+  "buildCommand": "node scripts/build-api.js",
   "functions": {
-    "api/index.ts": {
-      "includeFiles": "node_modules/**"
+    "api/index.js": {
+      "includeFiles": "node_modules/{sharp,bcrypt}/**"
     }
   },
   "rewrites": [
