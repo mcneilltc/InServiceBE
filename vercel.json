@@ -2,7 +2,7 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "functions": {
     "api/index.ts": {
-      "includeFiles": "node_modules/{mime,@google-cloud/storage}/**"
+      "includeFiles": "node_modules/{mime,@google-cloud/storage,agent-base,asynckit,axios,call-bind-apply-helpers,combined-stream,debug,delayed-stream,dunder-proto,es-define-property,es-errors,es-object-atoms,es-set-tostringtag,follow-redirects,form-data,function-bind,get-intrinsic,get-proto,gopd,has-symbols,has-tostringtag,hasown,https-proxy-agent,math-intrinsics,mime-db,mime-types,ms,proxy-from-env}/**"
     }
   },
   "rewrites": [
