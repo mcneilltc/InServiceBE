@@ -1,0 +1,49 @@
+services:
+  - type: web
+    name: certledgeriq-backend
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      # Values for everything below are set manually in the Render dashboard
+      # (Environment tab) — never committed here. See the list this project
+      # has settled on across the Vercel attempts for what's actually needed:
+      # FIREBASE_SERVICE_ACCOUNT_JSON, FIREBASE_DATABASE_URL, SESSION_SECRET,
+      # GOOGLE_CLIENT_ID, GEMINI_API_KEY, RESEND_API_KEY, EMAIL_FROM,
+      # MANAGER_EMAIL, TRAINING_TEAM_EMAIL, EMPLOYEE_INVITE_TOKEN_SECRET,
+      # FRONTEND_URL (point this at the real deployed frontend URL, not
+      # localhost), WHENIWORK_API_TOKEN, WHENIWORK_API_BASE_URL,
+      # WHENIWORK_WEBHOOK_SECRET, WHENIWORK_INSERVICE_KEYWORD.
+      - key: FIREBASE_SERVICE_ACCOUNT_JSON
+        sync: false
+      - key: FIREBASE_DATABASE_URL
+        sync: false
+      - key: SESSION_SECRET
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: EMAIL_FROM
+        sync: false
+      - key: MANAGER_EMAIL
+        sync: false
+      - key: TRAINING_TEAM_EMAIL
+        sync: false
+      - key: EMPLOYEE_INVITE_TOKEN_SECRET
+        sync: false
+      - key: FRONTEND_URL
+        sync: false
+      - key: WHENIWORK_API_TOKEN
+        sync: false
+      - key: WHENIWORK_API_BASE_URL
+        sync: false
+      - key: WHENIWORK_WEBHOOK_SECRET
+        sync: false
+      - key: WHENIWORK_INSERVICE_KEYWORD
+        sync: false
