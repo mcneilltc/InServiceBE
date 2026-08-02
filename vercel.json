@@ -2,7 +2,7 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "functions": {
     "api/index.ts": {
-      "includeFiles": "node_modules/{zod,mime,@google-cloud/storage}/**"
+      "includeFiles": "node_modules/{mime,@google-cloud/storage}/**"
     }
   },
   "rewrites": [
