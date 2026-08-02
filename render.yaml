@@ -3,8 +3,8 @@ services:
     name: certledgeriq-backend
     runtime: node
     plan: free
-    buildCommand: npm install
-    startCommand: npm start
+    buildCommand: npm install && npm run build
+    startCommand: node dist/app.js
     envVars:
       - key: NODE_ENV
         value: production
