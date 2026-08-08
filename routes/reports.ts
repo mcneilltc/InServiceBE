@@ -104,5 +104,71 @@ router.get('/', async (req: any, res) => {
   }
 });
 
+// Per-employee inservice hours over a date range — the "Employee Hours"
+// report type. Exempt employees are included (not hidden, unlike the
+// compliance/dashboard views) since a report is for visibility, not action —
+// their own row is just tagged 'exempt' rather than judged against the
+// 4-hour requirement.
+router.get('/hours', async (req: any, res) => {
+  try {
+    const { startDate, endDate, workSite } = req.query;
+
+    const clientRequestedSites: string[] | null = workSite && workSite !== 'all'
+      ? String(workSite).split(',').map((s: string) => s.trim()).filter(Boolean)
+      : null;
+    // homeLocation is the roster/security boundary here (mirrors dashboard
+    // stats' homeSite), not the training location a checkin happened at.
+    const requestedHomeSites = clampSitesToScope(req.user, clientRequestedSites);
+
+    const dateStart = startDate ? new Date(startDate) : new Date(0);
+    const dateEnd = endDate ? new Date(endDate) : new Date();
+
+    const employeesSnapshot = await db.collection('employees').where('isActive', '==', true).get();
+    const REQUIRED_HOURS = 4;
+    const rows: any[] = [];
+
+    for (const employeeDoc of employeesSnapshot.docs) {
+      const data = employeeDoc.data();
+      const location = data.homeLocation || (data.locations && data.locations[0]) || 'Unknown';
+      if (requestedHomeSites && !requestedHomeSites.includes(location)) continue;
+
+      const sessionsSnapshot = await employeeDoc.ref.collection('trainingSessions').get();
+      let totalHours = 0;
+      sessionsSnapshot.forEach((sessionDoc: any) => {
+        const session = sessionDoc.data();
+        const sessionDate = session.date ? new Date(session.date) : null;
+        if (sessionDate && sessionDate >= dateStart && sessionDate <= dateEnd) {
+          totalHours += parseFloat(session.length) || 0;
+        }
+      });
+      totalHours = Math.round(totalHours * 10) / 10;
+
+      const isExempt = !!data.isExemptFromHoursRequirement;
+      let status: string;
+      if (isExempt) status = 'exempt';
+      else if (totalHours >= REQUIRED_HOURS) status = 'complete';
+      else if (totalHours >= REQUIRED_HOURS * 0.75) status = 'atRisk';
+      else status = 'incomplete';
+
+      rows.push({
+        id: employeeDoc.id,
+        name: data.name || 'Unknown',
+        email: data.email || '',
+        location,
+        totalHours,
+        requiredHours: REQUIRED_HOURS,
+        hoursLeft: isExempt ? 0 : Math.max(0, REQUIRED_HOURS - totalHours),
+        status,
+        isExempt,
+      });
+    }
+
+    res.json(rows);
+  } catch (error) {
+    console.error('Error generating hours report:', error);
+    res.status(500).json({ error: { message: 'Failed to generate hours report' } });
+  }
+});
+
 export default router;
 

@@ -247,14 +247,33 @@ router.post('/:sessionId/close', requireRole(STAFF), async (req, res) => {
   }
 });
 
-// Get all sessions
-router.get('/', requireRole(STAFF), async (req, res) => {
+// Get all sessions — optionally narrowed by status/date range/location.
+// All three filters are additive and optional (existing callers that pass
+// none of them, like the manager dashboard, keep getting everything back
+// unfiltered, then narrow client-side same as before).
+router.get('/', requireRole(STAFF), async (req: any, res) => {
   try {
+    const { status, startDate, endDate, workSite } = req.query;
     const sessionsSnapshot = await db.collection('sessions').get();
-    const sessions = [];
+    const sessions: any[] = [];
+
+    const dateStart = startDate ? new Date(startDate) : null;
+    const dateEnd = endDate ? new Date(endDate) : null;
+    const sites: string[] | null = workSite && workSite !== 'all'
+      ? String(workSite).split(',').map((s: string) => s.trim()).filter(Boolean)
+      : null;
 
     sessionsSnapshot.forEach(doc => {
-      sessions.push({ id: doc.id, ...doc.data() });
+      const session: any = { id: doc.id, ...doc.data() };
+      if (status && session.status !== status) return;
+      if (dateStart || dateEnd) {
+        const sessionDate = session.date ? new Date(session.date) : null;
+        if (!sessionDate) return;
+        if (dateStart && sessionDate < dateStart) return;
+        if (dateEnd && sessionDate > dateEnd) return;
+      }
+      if (sites && !sites.includes(session.location)) return;
+      sessions.push(session);
     });
 
     res.json(sessions);

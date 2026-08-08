@@ -159,6 +159,9 @@ router.get('/stats', async (req: any, res) => {
 
     for (const employeeDoc of allEmployeesSnapshot.docs) {
       const employeeData = employeeDoc.data();
+      // Some supervisors are exempt from the 4-hour inservice requirement —
+      // leave them off the roster this endpoint tracks entirely.
+      if (employeeData.isExemptFromHoursRequirement) continue;
 
       // Calculate total hours from training sessions (length is stored in hours,
       // consistent with reports.ts, employeeSelfServiceController, and the session close-out pipeline).

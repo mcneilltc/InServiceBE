@@ -65,6 +65,11 @@ export async function computeComplianceBySiteForMonth(monthMoment: moment.Moment
 
   await Promise.all(employeesSnap.docs.map(async (doc: any) => {
     const data = doc.data();
+    // Some supervisors are exempt from the 4-hour inservice requirement —
+    // leave them out of compliance entirely rather than showing them as
+    // perpetually "zero"/non-compliant.
+    if (data.isExemptFromHoursRequirement) return;
+
     const hours = await getEmployeeHoursForMonth(doc.id, monthStart, monthEnd);
 
     let status: EmployeeCompliance['status'];
@@ -166,6 +171,7 @@ export const sendMidMonthNotices = async (req: Request, res: Response, next: Nex
 
     for (const doc of employeesSnap.docs) {
       const data = doc.data();
+      if (data.isExemptFromHoursRequirement) continue;
       const hours = await getEmployeeHoursForMonth(doc.id, monthStart, monthEnd);
       if (hours < MIDMONTH_THRESHOLD) {
         needsNotice.push({ id: doc.id, name: data.name || `${data.firstName} ${data.lastName}`.trim(), email: data.email || '', location: data.homeLocation || (data.locations && data.locations[0]) || data.location || 'Unknown', hours });
@@ -212,6 +218,7 @@ export const sendEndOfMonthAlerts = async (req: Request, res: Response, next: Ne
     const atRisk: any[] = [];
     for (const doc of employeesSnap.docs) {
       const data = doc.data();
+      if (data.isExemptFromHoursRequirement) continue;
       const hours = await getEmployeeHoursForMonth(doc.id, monthStart, monthEnd);
       if (hours < MONTHLY_THRESHOLD) {
         atRisk.push({ id: doc.id, name: data.name || `${data.firstName} ${data.lastName}`.trim(), email: data.email || '', location: data.homeLocation || (data.locations && data.locations[0]) || data.location || 'Unknown', hours });
