@@ -3,7 +3,8 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 import { db, getBucket } from '../config/firebase';
 import moment from 'moment';
 import sharp from 'sharp';
-import { randomUUID } from 'crypto';
+import { randomUUID, createHash } from 'crypto';
+import { findDuplicateSheetSession, findSimilarSheetSession } from '../services/sheetDuplicateCheck';
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
 
@@ -88,6 +89,21 @@ export const extractFromSheet = async (req: Request, res: Response, next: NextFu
 
     if (!process.env.GEMINI_API_KEY) {
       return res.status(500).json({ error: { message: 'GEMINI_API_KEY is not configured on the server' } });
+    }
+
+    // Hash the raw uploaded bytes (before any resizing) so re-uploading the
+    // exact same photo — whether by accident or to double-dip hours —
+    // always produces the same fingerprint. Checked before the (paid)
+    // Gemini call so a duplicate fails fast instead of burning OCR cost.
+    const sheetImageHashes = files.map((file) => createHash('sha256').update(file.buffer).digest('hex'));
+    const duplicate = await findDuplicateSheetSession(sheetImageHashes);
+    if (duplicate) {
+      return res.status(409).json({
+        error: {
+          message: `This sign-in sheet was already uploaded and credited — it matches the session on ${duplicate.date || 'an earlier date'} at ${duplicate.location || 'an unknown location'}. If this is a correction, edit that session instead of uploading it again.`,
+          duplicateSessionId: duplicate.sessionId,
+        },
+      });
     }
 
     const model = genAI.getGenerativeModel({ model: 'gemini-flash-latest' });
@@ -175,9 +191,22 @@ export const extractFromSheet = async (req: Request, res: Response, next: NextFu
 
     const sheetImageUrls = await persistPromise;
 
+    // Second layer — catches the same physical sheet photographed twice
+    // (different bytes, same session) instead of the exact same file
+    // re-uploaded. This is a warning surfaced to the uploader for review,
+    // not a block: a real second session can legitimately match.
+    const possibleDuplicate = await findSimilarSheetSession(
+      extracted.date,
+      extracted.location,
+      matchedTrainer?.id ? [matchedTrainer.id] : [],
+      matchedTopics.map((t: any) => t.matchedName || t.extractedName).filter(Boolean),
+    );
+
     res.json({
       extracted,
       sheetImageUrls,
+      sheetImageHashes,
+      possibleDuplicate,
       matched: {
         trainer: {
           extractedName: extracted.trainer,
