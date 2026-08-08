@@ -5,6 +5,7 @@ const { db } = require('../config/firebase');
 const moment = require('moment');
 const { requireRole } = require('../middleware/requireRole');
 import { performCloseOut } from '../services/sessionCloseOutService';
+import { findDuplicateSheetSession } from '../services/sheetDuplicateCheck';
 
 const STAFF = ['supervisor', 'trainer'];
 
@@ -65,10 +66,11 @@ router.post('/', requireRole(STAFF), async (req, res) => {
 // Training Sessions list and count correctly toward hour totals.
 router.post('/from-sheet', requireRole(STAFF), async (req, res) => {
   try {
-    const { date, location, startTime, endTime, length, topics, trainer, trainees, sheetImageUrls } = req.body;
+    const { date, location, startTime, endTime, length, topics, trainer, trainees, sheetImageUrls, sheetImageHashes, flaggedAsPossibleDuplicateOf } = req.body;
     const topicsArray = Array.isArray(topics) ? topics : (topics ? [topics] : []);
     const trainerIds = Array.isArray(trainer) ? trainer : (trainer ? [trainer] : []);
     const traineeList = Array.isArray(trainees) ? trainees : [];
+    const hashList = Array.isArray(sheetImageHashes) ? sheetImageHashes : [];
 
     const missingFields = [];
     if (!date) missingFields.push('date');
@@ -86,6 +88,19 @@ router.post('/from-sheet', requireRole(STAFF), async (req, res) => {
       });
     }
 
+    // Re-verify at the actual hour-crediting commit point, not just at OCR
+    // extraction time — closes the gap where a review screen sat open long
+    // enough for the same sheet to already get submitted another way.
+    const duplicate = await findDuplicateSheetSession(hashList);
+    if (duplicate) {
+      return res.status(409).json({
+        error: {
+          message: `This sign-in sheet was already uploaded and credited — it matches the session on ${duplicate.date || 'an earlier date'} at ${duplicate.location || 'an unknown location'}. If this is a correction, edit that session instead of uploading it again.`,
+          duplicateSessionId: duplicate.sessionId,
+        },
+      });
+    }
+
     const sessionData = {
       name: topicsArray.join(', '),
       date,
@@ -99,6 +114,12 @@ router.post('/from-sheet', requireRole(STAFF), async (req, res) => {
       status: 'scheduled',
       source: 'upload-sheet',
       sheetImageUrls: Array.isArray(sheetImageUrls) ? sheetImageUrls : [],
+      sheetImageHashes: hashList,
+      // Set only when the uploader was warned about a likely-similar existing
+      // session (see findSimilarSheetSession) and chose to save anyway —
+      // informational, so it can be surfaced to a supervisor reviewing
+      // Completed Trainings, never used to block saving.
+      flaggedAsPossibleDuplicateOf: flaggedAsPossibleDuplicateOf || null,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
@@ -226,14 +247,33 @@ router.post('/:sessionId/close', requireRole(STAFF), async (req, res) => {
   }
 });
 
-// Get all sessions
-router.get('/', requireRole(STAFF), async (req, res) => {
+// Get all sessions — optionally narrowed by status/date range/location.
+// All three filters are additive and optional (existing callers that pass
+// none of them, like the manager dashboard, keep getting everything back
+// unfiltered, then narrow client-side same as before).
+router.get('/', requireRole(STAFF), async (req: any, res) => {
   try {
+    const { status, startDate, endDate, workSite } = req.query;
     const sessionsSnapshot = await db.collection('sessions').get();
-    const sessions = [];
+    const sessions: any[] = [];
+
+    const dateStart = startDate ? new Date(startDate) : null;
+    const dateEnd = endDate ? new Date(endDate) : null;
+    const sites: string[] | null = workSite && workSite !== 'all'
+      ? String(workSite).split(',').map((s: string) => s.trim()).filter(Boolean)
+      : null;
 
     sessionsSnapshot.forEach(doc => {
-      sessions.push({ id: doc.id, ...doc.data() });
+      const session: any = { id: doc.id, ...doc.data() };
+      if (status && session.status !== status) return;
+      if (dateStart || dateEnd) {
+        const sessionDate = session.date ? new Date(session.date) : null;
+        if (!sessionDate) return;
+        if (dateStart && sessionDate < dateStart) return;
+        if (dateEnd && sessionDate > dateEnd) return;
+      }
+      if (sites && !sites.includes(session.location)) return;
+      sessions.push(session);
     });
 
     res.json(sessions);
