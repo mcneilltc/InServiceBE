@@ -112,4 +112,31 @@ describe('Dashboard API', () => {
       expect(response.body).toEqual({ totalHours: 5 });
     });
   });
+
+  describe('GET /api/dashboard/stats — hours-exempt supervisors', () => {
+    it('leaves an exempt employee out of employeesNeedingTraining entirely', async () => {
+      await db.collection('employees').add({
+        name: 'Exempt Supervisor',
+        homeLocation: 'MCAC',
+        isActive: true,
+        isSupervisor: true,
+        isExemptFromHoursRequirement: true,
+      });
+      await db.collection('employees').add({
+        name: 'Regular Lifeguard',
+        homeLocation: 'MCAC',
+        isActive: true,
+      });
+
+      const response = await request(app)
+        .get('/api/dashboard/stats')
+        .set('Cookie', authCookie())
+        .query({ period: 'month' });
+
+      expect(response.status).toBe(200);
+      const names = response.body.employeesNeedingTraining.map((e: any) => e.name);
+      expect(names).toContain('Regular Lifeguard');
+      expect(names).not.toContain('Exempt Supervisor');
+    });
+  });
 }); 
