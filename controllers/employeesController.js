@@ -139,7 +139,10 @@ const createEmployee = async (req, res, next) => {
       const message = existing.isActive
         ? `${existing.name} already exists (matched on ${matchedOn}). Edit their existing record instead of creating a new one.`
         : `${existing.name} already exists as an archived employee (matched on ${matchedOn}). Go to the Archived Employees tab and unarchive them instead of creating a new record.`;
-      return res.status(409).json({ error: { message } });
+      // employeeId lets callers like the bulk Excel importer re-target
+      // follow-up writes (e.g. historical hours) at the existing record
+      // instead of just giving up on a re-run.
+      return res.status(409).json({ error: { message, employeeId: existingDoc.id } });
     }
 
     const employeeData = {
