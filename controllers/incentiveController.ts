@@ -2,7 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { db } from '../config/firebase';
 import { z } from 'zod';
 import moment from 'moment';
-import { getEmployeeIncentiveSummary } from '../services/incentiveService';
+import { getEmployeeIncentiveSummary, getIncentiveTiers } from '../services/incentiveService';
 const { clampSitesToScope } = require('../services/authService');
 
 export const tierSchema = z.object({
@@ -122,14 +122,19 @@ export const getIncentiveStatus = async (req: any, res: Response, next: NextFunc
     const asOf = resolveAsOf(req.query.asOf as string);
     const requestedSites = clampSitesToScope(req.user, parseSites(req.query.sites));
 
-    const employeesSnap = await db.collection('employees').where('isActive', '==', true).get();
+    // Tiers are shared across the whole roster — fetch once here instead of
+    // once per employee inside the loop below.
+    const [employeesSnap, tiers] = await Promise.all([
+      db.collection('employees').where('isActive', '==', true).get(),
+      getIncentiveTiers(),
+    ]);
 
     const roster = (await Promise.all(employeesSnap.docs.map(async (doc: any) => {
       const data = doc.data();
       const loc = homeLocationOf(data);
       if (requestedSites && !requestedSites.includes(loc)) return null;
 
-      const summary = await getEmployeeIncentiveSummary(doc.id, asOf);
+      const summary = await getEmployeeIncentiveSummary(doc.id, asOf, { tiers });
       return {
         employeeId: doc.id,
         name: displayName(data),
