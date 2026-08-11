@@ -3,6 +3,7 @@ const express = require('express');
 const router = express.Router();
 const { db } = require('../config/firebase');
 const { clampSitesToScope } = require('../services/authService');
+import { parseLocalDate } from '../utils/dateParsing';
 
 // Get report data with filters
 router.get('/', async (req: any, res) => {
@@ -44,13 +45,18 @@ router.get('/', async (req: any, res) => {
         return;
       }
 
-      // Filter by date range if provided
+      // Filter by date range if provided. checkinTime is a full timestamp
+      // (unambiguous), but startDate/endDate arrive as bare "YYYY-MM-DD"
+      // strings from the date pickers — parseLocalDate keeps those boundaries
+      // anchored to local midnight instead of drifting a few hours earlier.
       if (startDate || endDate) {
         const checkinDate = new Date(checkin.checkinTime);
-        if (startDate && checkinDate < new Date(startDate)) {
+        const startBoundary = parseLocalDate(startDate);
+        const endBoundary = parseLocalDate(endDate);
+        if (startBoundary && checkinDate < startBoundary) {
           return;
         }
-        if (endDate && checkinDate > new Date(endDate)) {
+        if (endBoundary && checkinDate > endBoundary) {
           return;
         }
       }
@@ -120,8 +126,8 @@ router.get('/hours', async (req: any, res) => {
     // stats' homeSite), not the training location a checkin happened at.
     const requestedHomeSites = clampSitesToScope(req.user, clientRequestedSites);
 
-    const dateStart = startDate ? new Date(startDate) : new Date(0);
-    const dateEnd = endDate ? new Date(endDate) : new Date();
+    const dateStart = parseLocalDate(startDate) || new Date(0);
+    const dateEnd = parseLocalDate(endDate) || new Date();
 
     const employeesSnapshot = await db.collection('employees').where('isActive', '==', true).get();
     const REQUIRED_HOURS = 4;
@@ -136,7 +142,7 @@ router.get('/hours', async (req: any, res) => {
       let totalHours = 0;
       sessionsSnapshot.forEach((sessionDoc: any) => {
         const session = sessionDoc.data();
-        const sessionDate = session.date ? new Date(session.date) : null;
+        const sessionDate = parseLocalDate(session.date);
         if (sessionDate && sessionDate >= dateStart && sessionDate <= dateEnd) {
           totalHours += parseFloat(session.length) || 0;
         }

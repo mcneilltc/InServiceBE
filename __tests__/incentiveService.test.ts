@@ -15,11 +15,16 @@ describe('incentiveService.getEmployeeIncentiveSummary', () => {
     }
   });
 
-  async function makeEmployeeWithSessions(sessionDates: { date: string; length: number }[]) {
+  async function makeEmployeeWithSessions(sessionDates: { date: string; length: number; trainer?: any }[]) {
     const ref = await db.collection('employees').add({ name: 'Test Lifeguard', homeLocation: 'MCAC' });
     createdEmployeeIds.push(ref.id);
     for (const s of sessionDates) {
-      await ref.collection('trainingSessions').add({ date: s.date, length: s.length, status: 'completed' });
+      await ref.collection('trainingSessions').add({
+        date: s.date,
+        length: s.length,
+        status: 'completed',
+        trainer: s.trainer !== undefined ? s.trainer : ['some-trainer-id'],
+      });
     }
     return ref.id;
   }
@@ -116,5 +121,52 @@ describe('incentiveService.getEmployeeIncentiveSummary', () => {
     const summary = await getEmployeeIncentiveSummary(employeeId, asOf);
     expect(summary.currentStreak).toBe(12);
     expect(summary.annual.monthsQualified).toBe(12);
+  });
+
+  describe('bulk-imported historical hours', () => {
+    // Bulk Excel import always dates a backfilled month's hours on the 1st
+    // (always before the 15th) and tags the session with trainer: 'Imported'
+    // instead of a real trainer. Unfiltered, that would make any imported
+    // month with 4+ hours automatically read as "completed before the 15th"
+    // and hand out incentive credit for a month nobody verified was actually
+    // finished on time.
+    it('does not count an imported month toward this-month qualification', async () => {
+      const asOf = moment('2026-06-10');
+      const employeeId = await makeEmployeeWithSessions([
+        { date: '2026-06-01', length: 4, trainer: 'Imported' },
+      ]);
+
+      const summary = await getEmployeeIncentiveSummary(employeeId, asOf);
+
+      expect(summary.hoursByThe15th).toBe(0);
+      expect(summary.qualifiedThisMonth).toBeUndefined();
+    });
+
+    it('does not let imported prior months build a streak', async () => {
+      const asOf = moment('2026-06-20');
+      const employeeId = await makeEmployeeWithSessions([
+        { date: '2026-04-01', length: 4, trainer: 'Imported' },
+        { date: '2026-05-01', length: 4, trainer: 'Imported' },
+        { date: '2026-06-01', length: 4, trainer: 'Imported' },
+      ]);
+
+      const summary = await getEmployeeIncentiveSummary(employeeId, asOf);
+
+      expect(summary.currentStreak).toBe(0);
+      expect(summary.annual.monthsQualified).toBe(0);
+    });
+
+    it('still credits a real, non-imported session for the same employee', async () => {
+      const asOf = moment('2026-06-10');
+      const employeeId = await makeEmployeeWithSessions([
+        { date: '2026-05-01', length: 4, trainer: 'Imported' }, // excluded
+        { date: '2026-06-05', length: 4, trainer: ['real-trainer-id'] }, // counts
+      ]);
+
+      const summary = await getEmployeeIncentiveSummary(employeeId, asOf);
+
+      expect(summary.hoursByThe15th).toBe(4);
+      expect(summary.qualifiedThisMonth).toBe(true);
+    });
   });
 });

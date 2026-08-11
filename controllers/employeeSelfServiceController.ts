@@ -1,7 +1,8 @@
 import { Request, Response, NextFunction } from 'express';
 import { db } from '../config/firebase';
 import moment from 'moment';
-import { getEmployeeIncentiveSummary, SessionRecord } from '../services/incentiveService';
+import { getEmployeeIncentiveSummary, SessionRecord, isBulkImportedSession } from '../services/incentiveService';
+import { parseLocalDate } from '../utils/dateParsing';
 
 const MIDMONTH_THRESHOLD = 2;
 const MONTHLY_THRESHOLD = 4;
@@ -51,7 +52,12 @@ async function resolveSessionsWithTrainerNames(
     return {
       id,
       topics: s.topics || (s.topic ? [s.topic] : []),
-      trainer: resolveTrainerDisplay(s.trainer),
+      // A bulk-imported record's trainer is the literal placeholder
+      // 'Imported', not a real trainer — show who actually uploaded it
+      // instead, when that's on record.
+      trainer: s.trainer === 'Imported'
+        ? (s.createdBy?.name ? `Imported by ${s.createdBy.name}` : 'Imported')
+        : resolveTrainerDisplay(s.trainer),
       date: s.date,
       hours: hrs,
       location: s.location,
@@ -145,16 +151,21 @@ function filterToThisMonth(rawSessions: RawSession[]): RawSession[] {
   const monthStart = moment().startOf('month').toDate();
   const monthEnd = moment().endOf('month').toDate();
   return rawSessions.filter(({ data: s }) => {
-    const sessionDate = s.date ? new Date(s.date) : null;
+    const sessionDate = parseLocalDate(s.date);
     return !!sessionDate && sessionDate >= monthStart && sessionDate <= monthEnd;
   });
 }
 
+// Feeds getEmployeeIncentiveSummary's `preloaded.sessions` — must exclude
+// bulk-imported hours the same way incentiveService's own getAllSessions
+// does (see isBulkImportedSession), or this optimization would silently
+// bypass that exclusion since it never calls getAllSessions at all.
 function toSessionRecords(rawSessions: RawSession[]): SessionRecord[] {
   const records: SessionRecord[] = [];
   for (const { data: s } of rawSessions) {
-    const date = s.date ? new Date(s.date) : null;
-    if (date && !isNaN(date.getTime())) {
+    if (isBulkImportedSession(s)) continue;
+    const date = parseLocalDate(s.date);
+    if (date) {
       records.push({ date, length: parseFloat(s.length) || 0 });
     }
   }

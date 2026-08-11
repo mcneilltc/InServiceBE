@@ -1,5 +1,6 @@
 import { db } from '../config/firebase';
 import moment from 'moment';
+import { parseLocalDate } from '../utils/dateParsing';
 
 // The incentive program's eligibility rule: all 4 hours of inservice
 // recorded before the 15th of the month. Deliberately independent of the
@@ -21,6 +22,25 @@ export interface SessionRecord {
   length: number;
 }
 
+// Bulk Excel import (Manage Employees → Import from Excel) backfills
+// historical hours by creating a training-session record dated the 1st of
+// whatever month it's crediting, tagged with the literal trainer value
+// 'Imported' instead of a real trainer ID. The 1st is always before the
+// 15th, so — left unfiltered — a backdated import for ANY past month would
+// automatically read as "completed before the 15th" and silently hand out
+// incentive qualification/streak credit for a month nobody actually
+// verified was finished on time. Imported hours still count everywhere else
+// (compliance status, dashboard totals, the Employee Hours report) — this
+// exclusion is specific to the incentive program, whose whole premise is
+// rewarding genuine on-time completion, never paperwork entered after the fact.
+// Exported so other callers building their own SessionRecord[] from
+// already-fetched raw session docs (instead of calling getAllSessions below)
+// apply the exact same exclusion rather than reimplementing — and can't
+// silently drift out of sync with it.
+export function isBulkImportedSession(s: FirebaseFirestore.DocumentData): boolean {
+  return s.trainer === 'Imported';
+}
+
 // Reads an employee's entire trainingSessions subcollection exactly once.
 // Every month-qualification computation below (this month, the streak
 // lookback, the annual grid) works off this same in-memory list instead of
@@ -39,8 +59,9 @@ export async function getAllSessions(employeeId: string): Promise<SessionRecord[
   const sessions: SessionRecord[] = [];
   sessionsSnap.forEach((doc: any) => {
     const s = doc.data();
-    const date = s.date ? new Date(s.date) : null;
-    if (date && !isNaN(date.getTime())) {
+    if (isBulkImportedSession(s)) return;
+    const date = parseLocalDate(s.date);
+    if (date) {
       sessions.push({ date, length: parseFloat(s.length) || 0 });
     }
   });

@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { db } from '../config/firebase';
 import moment from 'moment';
 import { computeComplianceBySiteForMonth } from './complianceController';
+import { parseLocalDate } from '../utils/dateParsing';
 const { clampSitesToScope } = require('../services/authService');
 
 const MONTHLY_THRESHOLD = 4; // hours required by end of month — mirrors complianceController.ts
@@ -67,8 +68,8 @@ export const getSessionAnalytics = async (req: Request, res: Response, next: Nex
     snapshot.forEach((doc: any) => {
       const s = doc.data();
       if (s.status !== 'completed') return;
-      const sessionDate = s.date ? new Date(s.date) : null;
-      if (!sessionDate || isNaN(sessionDate.getTime())) return;
+      const sessionDate = parseLocalDate(s.date);
+      if (!sessionDate) return;
       if (sessionDate < dateStart || sessionDate > dateEnd) return;
       if (requestedSites && !requestedSites.includes(s.location)) return;
 
@@ -186,8 +187,8 @@ export const getComplianceOutlook = async (req: any, res: Response, next: NextFu
         let hours = 0;
         sessionsSnap.forEach((sd: any) => {
           const s = sd.data();
-          const d = s.date ? new Date(s.date) : null;
-          if (d && !isNaN(d.getTime()) && d >= weekStart && d <= weekEnd) {
+          const d = parseLocalDate(s.date);
+          if (d && d >= weekStart && d <= weekEnd) {
             hours += parseFloat(s.length) || 0;
           }
         });
@@ -224,8 +225,8 @@ export const getComplianceOutlook = async (req: any, res: Response, next: NextFu
       const monthlyHours: Record<string, number> = {};
       sessionsSnap.forEach((sd: any) => {
         const s = sd.data();
-        const d = s.date ? new Date(s.date) : null;
-        if (!d || isNaN(d.getTime())) return;
+        const d = parseLocalDate(s.date);
+        if (!d) return;
         const key = moment(d).format('YYYY-MM');
         monthlyHours[key] = (monthlyHours[key] || 0) + (parseFloat(s.length) || 0);
       });
