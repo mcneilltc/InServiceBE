@@ -4,6 +4,22 @@
 // so this must run first regardless of require/import order elsewhere.
 require('dotenv').config();
 
+// The Firestore Admin SDK's streaming Query.get() (used everywhere in this
+// app) can, on certain low-level gRPC errors — RESOURCE_EXHAUSTED (quota)
+// among them — emit an error on the underlying stream *after* the promise
+// it backs has already rejected and been caught. Node's default behavior
+// for an unlistened 'error' event is to throw and kill the process, so a
+// single quota hiccup on a background poller (session-automation) was
+// enough to take the entire API down for every user, not just fail that one
+// request. Logging and staying up is the right tradeoff here — a transient
+// Firestore error should degrade individual requests, not the whole server.
+process.on('uncaughtException', (err: Error) => {
+  console.error('[uncaughtException] Not crashing — logging and continuing:', err);
+});
+process.on('unhandledRejection', (reason: unknown) => {
+  console.error('[unhandledRejection] Not crashing — logging and continuing:', reason);
+});
+
 const express = require('express');
 const cors = require('cors');
 const cookieParser = require('cookie-parser');

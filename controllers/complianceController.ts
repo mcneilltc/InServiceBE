@@ -3,6 +3,7 @@ import { db } from '../config/firebase';
 import * as admin from 'firebase-admin';
 import moment from 'moment';
 import { sendEmail, midMonthEmployeeTemplate, managerMidMonthAlertTemplate } from '../services/messagingService';
+import { parseLocalDate } from '../utils/dateParsing';
 
 const MIDMONTH_THRESHOLD = 2;   // hours required by the 15th
 const MONTHLY_THRESHOLD  = 4;   // hours required by end of month
@@ -38,7 +39,7 @@ async function getEmployeeHoursForMonth(employeeId: string, monthStart: Date, mo
   let total = 0;
   sessionsSnap.forEach((doc: any) => {
     const session = doc.data();
-    const sessionDate = session.date ? new Date(session.date) : null;
+    const sessionDate = parseLocalDate(session.date);
     if (sessionDate && sessionDate >= monthStart && sessionDate <= monthEnd) {
       total += parseFloat(session.length) || 0;
     }

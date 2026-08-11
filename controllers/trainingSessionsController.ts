@@ -75,7 +75,7 @@ export const getEmployeeSessions = async (req: Request, res: Response, next: Nex
   }
 };
 
-export const createSession = async (req: Request, res: Response, next: NextFunction) => {
+export const createSession = async (req: any, res: Response, next: NextFunction) => {
   try {
     const { date, location, startTime, length, topics, trainer, trainees } = req.body;
     const { employeeId } = req.params;
@@ -122,7 +122,18 @@ export const createSession = async (req: Request, res: Response, next: NextFunct
       trainer,
       trainees: trainees || [],
       status: 'completed',
-      createdAt: new Date().toISOString()
+      createdAt: new Date().toISOString(),
+      // Who actually submitted this record — distinct from `trainer` (who
+      // led the training), since for a bulk-imported historical entry those
+      // are two different people: the importer didn't teach the class, they
+      // just entered paperwork for it. Read from the verified session
+      // (req.user), never trusted from the request body, so it can't be
+      // spoofed by whoever's calling this endpoint.
+      createdBy: req.user ? {
+        employeeId: req.user.employeeId || null,
+        name: req.user.name || null,
+        email: req.user.email || null,
+      } : null,
     };
 
     const docRef = await db

@@ -3,6 +3,7 @@ const express = require('express');
 const router = express.Router();
 const { db } = require('../config/firebase');
 const { clampSitesToScope } = require('../services/authService');
+import { parseLocalDate } from '../utils/dateParsing';
 
 // Get training hours by location
 router.get('/training-hours-by-location', async (req, res) => {
@@ -144,8 +145,8 @@ router.get('/stats', async (req: any, res) => {
       dateStart = new Date(now.getFullYear(), 0, 1);
       dateEnd = new Date(now.getFullYear(), 11, 31, 23, 59, 59, 999);
     } else if (startDate && endDate) {
-      dateStart = new Date(startDate);
-      dateEnd = new Date(endDate);
+      dateStart = parseLocalDate(startDate as string) || new Date(0);
+      dateEnd = parseLocalDate(endDate as string) || new Date();
     } else {
       // Default to all time
       dateStart = new Date(0);
@@ -170,8 +171,8 @@ router.get('/stats', async (req: any, res) => {
       let totalHours = 0;
       sessionsSnapshot.forEach((sessionDoc: any) => {
         const session = sessionDoc.data();
-        const sessionDate = new Date(session.date);
-        if (sessionDate >= dateStart && sessionDate <= dateEnd) {
+        const sessionDate = parseLocalDate(session.date);
+        if (sessionDate && sessionDate >= dateStart && sessionDate <= dateEnd) {
           if (!requestedSites || requestedSites.includes(session.location)) {
             totalHours += parseFloat(session.length) || 0;
           }
@@ -220,8 +221,8 @@ router.get('/stats', async (req: any, res) => {
     const sessions: any[] = [];
     sessionsSnapshot.forEach((doc: any) => {
       const session = doc.data();
-      const sessionDate = new Date(session.date);
-      if (sessionDate >= dateStart && sessionDate <= dateEnd) {
+      const sessionDate = parseLocalDate(session.date);
+      if (sessionDate && sessionDate >= dateStart && sessionDate <= dateEnd) {
         if (!requestedSites || requestedSites.includes(session.location)) {
           sessions.push({ id: doc.id, ...session });
         }

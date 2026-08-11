@@ -6,6 +6,7 @@ const moment = require('moment');
 const { requireRole } = require('../middleware/requireRole');
 import { performCloseOut } from '../services/sessionCloseOutService';
 import { findDuplicateSheetSession } from '../services/sheetDuplicateCheck';
+import { parseLocalDate } from '../utils/dateParsing';
 
 const STAFF = ['supervisor', 'trainer'];
 
@@ -257,8 +258,8 @@ router.get('/', requireRole(STAFF), async (req: any, res) => {
     const sessionsSnapshot = await db.collection('sessions').get();
     const sessions: any[] = [];
 
-    const dateStart = startDate ? new Date(startDate) : null;
-    const dateEnd = endDate ? new Date(endDate) : null;
+    const dateStart = parseLocalDate(startDate);
+    const dateEnd = parseLocalDate(endDate);
     const sites: string[] | null = workSite && workSite !== 'all'
       ? String(workSite).split(',').map((s: string) => s.trim()).filter(Boolean)
       : null;
@@ -267,7 +268,7 @@ router.get('/', requireRole(STAFF), async (req: any, res) => {
       const session: any = { id: doc.id, ...doc.data() };
       if (status && session.status !== status) return;
       if (dateStart || dateEnd) {
-        const sessionDate = session.date ? new Date(session.date) : null;
+        const sessionDate = parseLocalDate(session.date);
         if (!sessionDate) return;
         if (dateStart && sessionDate < dateStart) return;
         if (dateEnd && sessionDate > dateEnd) return;

@@ -1,7 +1,8 @@
 import { Request, Response, NextFunction } from 'express';
 import { db } from '../config/firebase';
 import moment from 'moment';
-import { getEmployeeIncentiveSummary } from '../services/incentiveService';
+import { getEmployeeIncentiveSummary, SessionRecord, isBulkImportedSession } from '../services/incentiveService';
+import { parseLocalDate } from '../utils/dateParsing';
 
 const MIDMONTH_THRESHOLD = 2;
 const MONTHLY_THRESHOLD = 4;
@@ -51,7 +52,12 @@ async function resolveSessionsWithTrainerNames(
     return {
       id,
       topics: s.topics || (s.topic ? [s.topic] : []),
-      trainer: resolveTrainerDisplay(s.trainer),
+      // A bulk-imported record's trainer is the literal placeholder
+      // 'Imported', not a real trainer — show who actually uploaded it
+      // instead, when that's on record.
+      trainer: s.trainer === 'Imported'
+        ? (s.createdBy?.name ? `Imported by ${s.createdBy.name}` : 'Imported')
+        : resolveTrainerDisplay(s.trainer),
       date: s.date,
       hours: hrs,
       location: s.location,
@@ -120,25 +126,50 @@ function shapeEmployeeForResponse(employeeId: string, employeeData: FirebaseFire
   };
 }
 
-async function getThisMonthRawSessions(employeeId: string) {
-  const monthStart = moment().startOf('month').toDate();
-  const monthEnd = moment().endOf('month').toDate();
+type RawSession = { id: string; data: FirebaseFirestore.DocumentData };
 
+// Reads an employee's entire trainingSessions subcollection exactly once.
+// Both the "this month" session list (for the compliance card) and the
+// SessionRecord[] the incentive summary needs are derived from this same
+// in-memory result below, instead of each doing their own separate read of
+// the identical subcollection.
+async function getAllRawSessions(employeeId: string): Promise<RawSession[]> {
   const sessionsSnap = await db
     .collection('employees')
     .doc(employeeId)
     .collection('trainingSessions')
     .get();
 
-  const rawSessions: { id: string; data: FirebaseFirestore.DocumentData }[] = [];
+  const rawSessions: RawSession[] = [];
   sessionsSnap.forEach((doc: any) => {
-    const s = doc.data();
-    const sessionDate = s.date ? new Date(s.date) : null;
-    if (sessionDate && sessionDate >= monthStart && sessionDate <= monthEnd) {
-      rawSessions.push({ id: doc.id, data: s });
-    }
+    rawSessions.push({ id: doc.id, data: doc.data() });
   });
   return rawSessions;
+}
+
+function filterToThisMonth(rawSessions: RawSession[]): RawSession[] {
+  const monthStart = moment().startOf('month').toDate();
+  const monthEnd = moment().endOf('month').toDate();
+  return rawSessions.filter(({ data: s }) => {
+    const sessionDate = parseLocalDate(s.date);
+    return !!sessionDate && sessionDate >= monthStart && sessionDate <= monthEnd;
+  });
+}
+
+// Feeds getEmployeeIncentiveSummary's `preloaded.sessions` — must exclude
+// bulk-imported hours the same way incentiveService's own getAllSessions
+// does (see isBulkImportedSession), or this optimization would silently
+// bypass that exclusion since it never calls getAllSessions at all.
+function toSessionRecords(rawSessions: RawSession[]): SessionRecord[] {
+  const records: SessionRecord[] = [];
+  for (const { data: s } of rawSessions) {
+    if (isBulkImportedSession(s)) continue;
+    const date = parseLocalDate(s.date);
+    if (date) {
+      records.push({ date, length: parseFloat(s.length) || 0 });
+    }
+  }
+  return records;
 }
 
 // POST /api/employee/lookup
@@ -185,9 +216,9 @@ export const lookupEmployee = async (req: Request, res: Response, next: NextFunc
     const employeeId = matchedDoc.id;
     const employeeData = matchedDoc.data();
 
-    const rawSessions = await getThisMonthRawSessions(employeeId);
-    const { sessions, totalHoursThisMonth } = await resolveSessionsWithTrainerNames(rawSessions);
-    const incentive = await getEmployeeIncentiveSummary(employeeId);
+    const allRawSessions = await getAllRawSessions(employeeId);
+    const { sessions, totalHoursThisMonth } = await resolveSessionsWithTrainerNames(filterToThisMonth(allRawSessions));
+    const incentive = await getEmployeeIncentiveSummary(employeeId, moment(), { sessions: toSessionRecords(allRawSessions) });
 
     res.json({
       employee: shapeEmployeeForResponse(employeeId, employeeData, firstName, lastName),
@@ -215,9 +246,9 @@ export const getEmployeeDetailForManager = async (req: Request, res: Response, n
 
     const employeeData = doc.data() as FirebaseFirestore.DocumentData;
 
-    const rawSessions = await getThisMonthRawSessions(employeeId);
-    const { sessions, totalHoursThisMonth } = await resolveSessionsWithTrainerNames(rawSessions);
-    const incentive = await getEmployeeIncentiveSummary(employeeId);
+    const allRawSessions = await getAllRawSessions(employeeId);
+    const { sessions, totalHoursThisMonth } = await resolveSessionsWithTrainerNames(filterToThisMonth(allRawSessions));
+    const incentive = await getEmployeeIncentiveSummary(employeeId, moment(), { sessions: toSessionRecords(allRawSessions) });
 
     res.json({
       employee: shapeEmployeeForResponse(employeeId, employeeData),
