@@ -105,8 +105,16 @@ app.get('/', (req, res) => {
   res.send('Training Management Application Backend is running!');
 });
 
-// TEMPORARY dev-only login shortcut for manual browser verification — remove before committing.
-if (process.env.NODE_ENV !== 'production') {
+// Dev-only login shortcut for manual browser verification — bypasses real
+// OAuth entirely (zero-password login as any email). Gated on TWO
+// independent conditions, not one: an explicit opt-in flag (defaults to
+// off, so a forgotten/misconfigured env var can never silently open this —
+// the previous version only checked NODE_ENV !== 'production', so any
+// environment that forgot to set NODE_ENV had this live by default) AND
+// NODE_ENV !== 'production' (so even accidentally copying ENABLE_DEV_LOGIN
+// into a real production environment's env vars can't re-enable it there).
+// Set ENABLE_DEV_LOGIN=true in your own local .env to use this.
+if (process.env.ENABLE_DEV_LOGIN === 'true' && process.env.NODE_ENV !== 'production') {
   app.get('/__dev_login', async (req: any, res: any) => {
     const jwt = require('jsonwebtoken');
     const { resolveRole } = require('./services/authService');
