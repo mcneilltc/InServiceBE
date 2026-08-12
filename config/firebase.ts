@@ -12,7 +12,7 @@ if (!admin.apps.length) {
     // beforeEach) from being able to delete real production data.
     if (process.env.FIRESTORE_EMULATOR_HOST) {
       const projectId = process.env.FIREBASE_PROJECT_ID || 'inservicetracker';
-      admin.initializeApp({ projectId, storageBucket: `${projectId}.appspot.com` });
+      admin.initializeApp({ projectId });
       console.log(`Firebase Admin initialized against Firestore emulator at ${process.env.FIRESTORE_EMULATOR_HOST}`);
     } else {
       // Serverless platforms (Vercel, etc.) have no persistent filesystem to read a
@@ -26,9 +26,6 @@ if (!admin.apps.length) {
       admin.initializeApp({
         credential: admin.credential.cert(serviceAccount),
         databaseURL: process.env.FIREBASE_DATABASE_URL,
-        // Cloud Storage must be enabled for this project in the Firebase console
-        // before this bucket actually exists — see FIREBASE_STORAGE_BUCKET in .env.
-        storageBucket: process.env.FIREBASE_STORAGE_BUCKET || `${serviceAccount.project_id}.appspot.com`,
       });
 
       console.log('Firebase Admin initialized successfully');
@@ -47,16 +44,4 @@ db.settings({
   ignoreUndefinedProperties: true
 });
 
-// Lazy — importing @google-cloud/storage eagerly (i.e. at module load, which
-// happens on every request since nearly every route imports this file) has
-// twice now crashed the whole app in Vercel's environment: once because
-// Cloud Storage isn't enabled for this Firebase project yet, and again
-// because Vercel's dependency bundler failed to trace one of that package's
-// own transitive deps ("mime"). Deferring the require to first actual use
-// means only the one feature that needs Storage (OCR image persistence) is
-// at risk, and it already fails open around this call.
-function getBucket() {
-  return admin.storage().bucket();
-}
-
-export { admin, db, getBucket };
+export { admin, db };
