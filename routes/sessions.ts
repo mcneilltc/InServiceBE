@@ -6,6 +6,8 @@ const moment = require('moment');
 const { requireRole } = require('../middleware/requireRole');
 import { performCloseOut } from '../services/sessionCloseOutService';
 import { findDuplicateSheetSession } from '../services/sheetDuplicateCheck';
+import { getSignedSheetImageUrl } from '../config/r2';
+import { parseLocalDate } from '../utils/dateParsing';
 
 const STAFF = ['supervisor', 'trainer'];
 
@@ -66,7 +68,7 @@ router.post('/', requireRole(STAFF), async (req, res) => {
 // Training Sessions list and count correctly toward hour totals.
 router.post('/from-sheet', requireRole(STAFF), async (req, res) => {
   try {
-    const { date, location, startTime, endTime, length, topics, trainer, trainees, sheetImageUrls, sheetImageHashes, flaggedAsPossibleDuplicateOf } = req.body;
+    const { date, location, startTime, endTime, length, topics, trainer, trainees, sheetImageKeys, sheetImageHashes, flaggedAsPossibleDuplicateOf } = req.body;
     const topicsArray = Array.isArray(topics) ? topics : (topics ? [topics] : []);
     const trainerIds = Array.isArray(trainer) ? trainer : (trainer ? [trainer] : []);
     const traineeList = Array.isArray(trainees) ? trainees : [];
@@ -113,7 +115,7 @@ router.post('/from-sheet', requireRole(STAFF), async (req, res) => {
       trainees: traineeList.map((t: any) => t.employeeId),
       status: 'scheduled',
       source: 'upload-sheet',
-      sheetImageUrls: Array.isArray(sheetImageUrls) ? sheetImageUrls : [],
+      sheetImageKeys: Array.isArray(sheetImageKeys) ? sheetImageKeys : [],
       sheetImageHashes: hashList,
       // Set only when the uploader was warned about a likely-similar existing
       // session (see findSimilarSheetSession) and chose to save anyway —
@@ -176,7 +178,9 @@ router.post('/from-sheet', requireRole(STAFF), async (req, res) => {
 // Get a specific session by ID — stays public: the QR check-in page
 // (src/pages/checkin/[sessionId].js) fetches this before the visitor has
 // identified themselves at all. Only exposes session metadata (topic/date/
-// location/trainer ids), no employee PII.
+// location/trainer ids), no employee PII — sheetImageKeys is stripped so the
+// raw R2 object keys backing this session's sign-in sheet photos never reach
+// an unauthenticated caller (viewing them requires GET /:sessionId/images).
 router.get('/:sessionId', async (req, res) => {
   try {
     const { sessionId } = req.params;
@@ -186,10 +190,37 @@ router.get('/:sessionId', async (req, res) => {
       return res.status(404).json({ message: 'Session not found' });
     }
 
-    res.json({ id: sessionDoc.id, ...sessionDoc.data() });
+    const { sheetImageKeys, ...publicData } = sessionDoc.data() as any;
+    res.json({ id: sessionDoc.id, ...publicData });
   } catch (error) {
     console.error('Error getting session:', error);
     res.status(500).json({ error: 'Failed to get session' });
+  }
+});
+
+// Signed, short-lived URLs for a session's sign-in sheet photos — the R2
+// bucket is private and sheetImageKeys are never sent to the client directly
+// (see the public GET /:sessionId above), so viewing a sheet always goes
+// through this authenticated route instead of a link that could be shared
+// or cached indefinitely.
+router.get('/:sessionId/images', requireRole(STAFF), async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const sessionDoc = await db.collection('sessions').doc(sessionId).get();
+
+    if (!sessionDoc.exists) {
+      return res.status(404).json({ message: 'Session not found' });
+    }
+
+    const keys: string[] = sessionDoc.data()?.sheetImageKeys || [];
+    const urls = await Promise.all(
+      keys.map((key) => getSignedSheetImageUrl(key))
+    );
+
+    res.json({ urls });
+  } catch (error) {
+    console.error('Error getting session images:', error);
+    res.status(500).json({ error: 'Failed to get session images' });
   }
 });
 
@@ -257,17 +288,18 @@ router.get('/', requireRole(STAFF), async (req: any, res) => {
     const sessionsSnapshot = await db.collection('sessions').get();
     const sessions: any[] = [];
 
-    const dateStart = startDate ? new Date(startDate) : null;
-    const dateEnd = endDate ? new Date(endDate) : null;
+    const dateStart = parseLocalDate(startDate);
+    const dateEnd = parseLocalDate(endDate);
     const sites: string[] | null = workSite && workSite !== 'all'
       ? String(workSite).split(',').map((s: string) => s.trim()).filter(Boolean)
       : null;
 
     sessionsSnapshot.forEach(doc => {
-      const session: any = { id: doc.id, ...doc.data() };
+      const { sheetImageKeys, ...rest } = doc.data() as any;
+      const session: any = { id: doc.id, ...rest, sheetImageCount: Array.isArray(sheetImageKeys) ? sheetImageKeys.length : 0 };
       if (status && session.status !== status) return;
       if (dateStart || dateEnd) {
-        const sessionDate = session.date ? new Date(session.date) : null;
+        const sessionDate = parseLocalDate(session.date);
         if (!sessionDate) return;
         if (dateStart && sessionDate < dateStart) return;
         if (dateEnd && sessionDate > dateEnd) return;

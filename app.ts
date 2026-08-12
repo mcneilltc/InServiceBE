@@ -4,6 +4,22 @@
 // so this must run first regardless of require/import order elsewhere.
 require('dotenv').config();
 
+// The Firestore Admin SDK's streaming Query.get() (used everywhere in this
+// app) can, on certain low-level gRPC errors — RESOURCE_EXHAUSTED (quota)
+// among them — emit an error on the underlying stream *after* the promise
+// it backs has already rejected and been caught. Node's default behavior
+// for an unlistened 'error' event is to throw and kill the process, so a
+// single quota hiccup on a background poller (session-automation) was
+// enough to take the entire API down for every user, not just fail that one
+// request. Logging and staying up is the right tradeoff here — a transient
+// Firestore error should degrade individual requests, not the whole server.
+process.on('uncaughtException', (err: Error) => {
+  console.error('[uncaughtException] Not crashing — logging and continuing:', err);
+});
+process.on('unhandledRejection', (reason: unknown) => {
+  console.error('[unhandledRejection] Not crashing — logging and continuing:', reason);
+});
+
 const express = require('express');
 const cors = require('cors');
 const cookieParser = require('cookie-parser');
@@ -89,8 +105,16 @@ app.get('/', (req, res) => {
   res.send('Training Management Application Backend is running!');
 });
 
-// TEMPORARY dev-only login shortcut for manual browser verification — remove before committing.
-if (process.env.NODE_ENV !== 'production') {
+// Dev-only login shortcut for manual browser verification — bypasses real
+// OAuth entirely (zero-password login as any email). Gated on TWO
+// independent conditions, not one: an explicit opt-in flag (defaults to
+// off, so a forgotten/misconfigured env var can never silently open this —
+// the previous version only checked NODE_ENV !== 'production', so any
+// environment that forgot to set NODE_ENV had this live by default) AND
+// NODE_ENV !== 'production' (so even accidentally copying ENABLE_DEV_LOGIN
+// into a real production environment's env vars can't re-enable it there).
+// Set ENABLE_DEV_LOGIN=true in your own local .env to use this.
+if (process.env.ENABLE_DEV_LOGIN === 'true' && process.env.NODE_ENV !== 'production') {
   app.get('/__dev_login', async (req: any, res: any) => {
     const jwt = require('jsonwebtoken');
     const { resolveRole } = require('./services/authService');
