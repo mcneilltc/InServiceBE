@@ -8,6 +8,7 @@ import { performCloseOut } from '../services/sessionCloseOutService';
 import { findDuplicateSheetSession } from '../services/sheetDuplicateCheck';
 import { getSignedSheetImageUrl } from '../config/r2';
 import { parseLocalDate } from '../utils/dateParsing';
+import { getMandatoryTopicsForDate } from '../services/mandatoryTopicsService';
 
 const STAFF = ['supervisor', 'trainer'];
 
@@ -28,6 +29,21 @@ router.post('/', requireRole(STAFF), async (req, res) => {
         error: {
           message: 'Validation Error',
           details: missingFields.map((field) => ({ path: [field], message: `${field} is required` }))
+        }
+      });
+    }
+
+    // Whichever topics are mandatory for this date's week (see
+    // mandatoryTopicsService) must be included — this is the real
+    // enforcement boundary; the Add Training UI locking them from removal
+    // is just the client-side convenience on top of this.
+    const { topics: mandatoryTopics } = await getMandatoryTopicsForDate(date);
+    const missingMandatory = mandatoryTopics.filter((t: string) => !topicsArray.includes(t));
+    if (missingMandatory.length > 0) {
+      return res.status(400).json({
+        error: {
+          message: `The following mandatory topic(s) for this week must be included: ${missingMandatory.join(', ')}`,
+          missingMandatoryTopics: missingMandatory,
         }
       });
     }

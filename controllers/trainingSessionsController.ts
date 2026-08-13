@@ -87,8 +87,12 @@ export const createSession = async (req: any, res: Response, next: NextFunction)
     // already-active session for up to ~12 hours. Trainers are unaffected
     // regardless (the flag only ever applies to supervisors).
     if (req.user?.role === 'supervisor') {
-      const supervisorDoc = await db.collection('employees').doc(req.user.employeeId).get();
-      const liveCanAddManualHours = supervisorDoc.exists ? supervisorDoc.data()?.canAddManualHours !== false : true;
+      // No employeeId on the session to look up (shouldn't happen for a real
+      // login — authService.resolveRole always sets it — but fall back to
+      // the JWT claim rather than crashing on Firestore's .doc(falsy)).
+      const liveCanAddManualHours = req.user.employeeId
+        ? (await db.collection('employees').doc(req.user.employeeId).get()).data()?.canAddManualHours !== false
+        : req.user.canAddManualHours !== false;
       if (!liveCanAddManualHours) {
         return res.status(403).json({
           message: 'You do not have permission to manually add hours for employees. Contact an administrator to request access.',

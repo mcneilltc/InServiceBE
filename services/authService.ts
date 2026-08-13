@@ -31,6 +31,9 @@ const resolveRole = async (email: string) => {
       // Only false when an admin has explicitly revoked it — missing/undefined
       // (pre-existing supervisors) defaults to allowed.
       canAddManualHours: employee.canAddManualHours !== false,
+      // Opt-in, unlike canAddManualHours above — stays restricted to
+      // whichever one supervisor is explicitly granted it.
+      canManageMandatoryTopics: employee.canManageMandatoryTopics === true,
     };
   }
 
