@@ -6,6 +6,7 @@ const { requireRole } = require('../middleware/requireRole');
 const { clampSitesToScope } = require('../services/authService');
 const moment = require('moment');
 import { selfCheckin } from '../controllers/checkinController';
+import { uploadSignature } from '../services/signatureStorage';
 
 // Self check-in via the electronic form closes this long after the session's
 // scheduled start — after that, a trainer must add a late employee manually
@@ -17,7 +18,7 @@ const SELF_CHECKIN_GRACE_MINUTES = 1;
 //  - { sessionId, employeeId } — trusted, used by the "manually add employee" admin flow
 //  - { sessionId, badgeNumber, firstName, lastName } — public QR self check-in flow
 router.post('/', async (req, res) => {
-  const { sessionId, employeeId, badgeNumber, firstName, lastName } = req.body;
+  const { sessionId, employeeId, badgeNumber, firstName, lastName, signature } = req.body;
 
   if (!sessionId) {
     return res.status(400).json({ message: 'sessionId is required.' });
@@ -101,7 +102,7 @@ router.post('/', async (req, res) => {
       return res.status(409).json({ message: 'This employee has already checked in for this session.' });
     }
 
-    const checkinData = {
+    const checkinData: any = {
       sessionId,
       employeeId: empId,
       badgeNumber: employeeData.badgeNumber || null,
@@ -115,7 +116,13 @@ router.post('/', async (req, res) => {
       checkinTime: new Date().toISOString(),
     };
 
-    const docRef = await db.collection('checkins').add(checkinData);
+    // Pre-allocate the doc ref so its ID is known before writing — the
+    // employee's signature (if provided) is stored in R2 keyed by this ID.
+    const docRef = db.collection('checkins').doc();
+    if (signature) {
+      checkinData.signatureKey = await uploadSignature(sessionId, docRef.id, signature);
+    }
+    await docRef.set(checkinData);
 
     res.status(200).json({
       id: docRef.id,

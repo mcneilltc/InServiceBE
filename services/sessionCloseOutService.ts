@@ -1,6 +1,9 @@
 import { db } from '../config/firebase';
 import * as admin from 'firebase-admin';
 import moment from 'moment';
+import { PutObjectCommand } from '@aws-sdk/client-s3';
+import { r2Client, getBucketName } from '../config/r2';
+import { generateInserviceSheet } from './inserviceSheetService';
 
 // The scheduled end of a session: date + startTime + length (hours). Used to
 // decide when a reminder or auto-close is due, and as the auto-close's
@@ -162,6 +165,24 @@ export async function performCloseOut(sessionId: string, options: CloseOutOption
     sessionUpdate.autoClosedAt = new Date().toISOString();
   }
   await sessionRef.update(sessionUpdate);
+
+  // Best-effort: generate the filled-in in-service sign-in sheet now that
+  // the session is completed. Hour-crediting above has already fully
+  // committed, so a template/R2 problem here must degrade to "no sheet yet"
+  // rather than ever blocking or rolling back close-out.
+  try {
+    const { buffer } = await generateInserviceSheet(sessionId);
+    const key = `inservice-sheets/${moment(sessionData.date || closeOutTime).format('YYYY/MM')}/${sessionId}.docx`;
+    await r2Client.send(new PutObjectCommand({
+      Bucket: getBucketName(),
+      Key: key,
+      Body: buffer,
+      ContentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    }));
+    await sessionRef.update({ inserviceSheetKey: key });
+  } catch (error) {
+    console.warn(`[close-out] Failed to generate in-service sheet for session ${sessionId}:`, (error as Error).message);
+  }
 
   return {
     employeesCredited,

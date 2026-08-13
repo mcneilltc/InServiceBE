@@ -224,6 +224,30 @@ router.get('/:sessionId/images', requireRole(STAFF), async (req, res) => {
   }
 });
 
+// Signed, short-lived URL for a session's generated in-service sign-in sheet
+// docx — same posture as GET /:sessionId/images above (the R2 key is never
+// sent to the client directly; GET / below exposes only a boolean).
+router.get('/:sessionId/inservice-sheet', requireRole(STAFF), async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const sessionDoc = await db.collection('sessions').doc(sessionId).get();
+
+    if (!sessionDoc.exists) {
+      return res.status(404).json({ message: 'Session not found.' });
+    }
+
+    const key = sessionDoc.data()?.inserviceSheetKey;
+    if (!key) {
+      return res.status(404).json({ message: 'No in-service sheet has been generated for this session.' });
+    }
+
+    res.json({ url: await getSignedSheetImageUrl(key) });
+  } catch (error) {
+    console.error('Error getting in-service sheet:', error);
+    res.status(500).json({ error: 'Failed to get in-service sheet' });
+  }
+});
+
 // Update a session (e.g., add trainees manually)
 router.put('/:sessionId', requireRole(STAFF), async (req, res) => {
   try {
@@ -295,8 +319,12 @@ router.get('/', requireRole(STAFF), async (req: any, res) => {
       : null;
 
     sessionsSnapshot.forEach(doc => {
-      const { sheetImageKeys, ...rest } = doc.data() as any;
-      const session: any = { id: doc.id, ...rest, sheetImageCount: Array.isArray(sheetImageKeys) ? sheetImageKeys.length : 0 };
+      const { sheetImageKeys, inserviceSheetKey, ...rest } = doc.data() as any;
+      const session: any = {
+        id: doc.id, ...rest,
+        sheetImageCount: Array.isArray(sheetImageKeys) ? sheetImageKeys.length : 0,
+        hasInserviceSheet: !!inserviceSheetKey,
+      };
       if (status && session.status !== status) return;
       if (dateStart || dateEnd) {
         const sessionDate = parseLocalDate(session.date);
