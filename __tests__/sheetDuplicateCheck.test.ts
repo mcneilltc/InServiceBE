@@ -3,7 +3,7 @@ const request = require('supertest');
 const app = require('../app').default;
 const { db } = require('../config/firebase');
 const { authCookie } = require('./testHelpers');
-const { findDuplicateSheetSession, findSimilarSheetSession } = require('../services/sheetDuplicateCheck');
+const { findDuplicateSheetSession, findSimilarSheetSession, findOverlappingInserviceSheetSession } = require('../services/sheetDuplicateCheck');
 
 // Runs against the local Firestore emulator (see jest.setup.js).
 describe('Upload Sheet duplicate detection', () => {
@@ -145,6 +145,80 @@ describe('Upload Sheet duplicate detection', () => {
       createdSessionIds.push(ref.id);
 
       const result = await findSimilarSheetSession('2026-06-01', 'ERRC', ['trainer-x'], ['First Aid']);
+      expect(result).toBeNull();
+    });
+  });
+
+  describe('findOverlappingInserviceSheetSession', () => {
+    it('finds a same-trainer session with an overlapping time range that already has a sheet', async () => {
+      const ref = await db.collection('sessions').add({
+        date: '2026-06-01',
+        startTime: '09:00 AM',
+        length: 2,
+        trainer: ['trainer-x'],
+        inserviceSheetKey: 'inservice-sheets/2026/06/existing.docx',
+      });
+      createdSessionIds.push(ref.id);
+
+      // 9:30-10:30, overlapping the existing 9:00-11:00 session
+      const result = await findOverlappingInserviceSheetSession(['trainer-x'], '2026-06-01', '09:30 AM', 1);
+      expect(result?.sessionId).toBe(ref.id);
+    });
+
+    it('does not flag a back-to-back session with no overlap', async () => {
+      const ref = await db.collection('sessions').add({
+        date: '2026-06-01',
+        startTime: '09:00 AM',
+        length: 2,
+        trainer: ['trainer-x'],
+        inserviceSheetKey: 'inservice-sheets/2026/06/existing.docx',
+      });
+      createdSessionIds.push(ref.id);
+
+      // Starts exactly when the existing one ends (11:00 AM) — not an overlap.
+      const result = await findOverlappingInserviceSheetSession(['trainer-x'], '2026-06-01', '11:00 AM', 1);
+      expect(result).toBeNull();
+    });
+
+    it('ignores a session that has not yet produced an inservice sheet', async () => {
+      const ref = await db.collection('sessions').add({
+        date: '2026-06-01',
+        startTime: '09:00 AM',
+        length: 2,
+        trainer: ['trainer-x'],
+        // no inserviceSheetKey — e.g. still scheduled, or closed with zero check-ins
+      });
+      createdSessionIds.push(ref.id);
+
+      const result = await findOverlappingInserviceSheetSession(['trainer-x'], '2026-06-01', '09:30 AM', 1);
+      expect(result).toBeNull();
+    });
+
+    it('ignores an overlapping session led by a different trainer', async () => {
+      const ref = await db.collection('sessions').add({
+        date: '2026-06-01',
+        startTime: '09:00 AM',
+        length: 2,
+        trainer: ['trainer-x'],
+        inserviceSheetKey: 'inservice-sheets/2026/06/existing.docx',
+      });
+      createdSessionIds.push(ref.id);
+
+      const result = await findOverlappingInserviceSheetSession(['trainer-y'], '2026-06-01', '09:30 AM', 1);
+      expect(result).toBeNull();
+    });
+
+    it('excludes the session being checked (excludeSessionId)', async () => {
+      const ref = await db.collection('sessions').add({
+        date: '2026-06-01',
+        startTime: '09:00 AM',
+        length: 2,
+        trainer: ['trainer-x'],
+        inserviceSheetKey: 'inservice-sheets/2026/06/existing.docx',
+      });
+      createdSessionIds.push(ref.id);
+
+      const result = await findOverlappingInserviceSheetSession(['trainer-x'], '2026-06-01', '09:00 AM', 2, ref.id);
       expect(result).toBeNull();
     });
   });

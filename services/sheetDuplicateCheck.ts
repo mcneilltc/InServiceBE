@@ -1,4 +1,5 @@
 import { db } from '../config/firebase';
+import moment from 'moment';
 
 // Firestore's array-contains-any accepts 1-10 values — a sign-in packet
 // realistically never has more pages than that, but guard anyway.
@@ -72,6 +73,56 @@ export async function findSimilarSheetSession(
     const topicOverlap = topics.some((t) => t && existingTopics.includes(t));
     if (trainerOverlap || topicOverlap) {
       return { sessionId: doc.id, date: data.date, location: data.location, trainer: existingTrainers, topics: existingTopics };
+    }
+  }
+  return null;
+}
+
+export interface OverlappingInserviceSheetMatch {
+  sessionId: string;
+  date: string;
+  startTime: string;
+  length: number;
+}
+
+// A trainer closing out (submitting an inservice sheet for) a session whose
+// scheduled time overlaps one they already submitted a sheet for that same
+// date would otherwise let the same time slot get double-submitted — this
+// is checked before crediting any hours. Only compares against sessions that
+// actually produced a sheet (inserviceSheetKey set); a zero-check-in session
+// never gets one (see performCloseOut), so it can't collide here.
+export async function findOverlappingInserviceSheetSession(
+  trainerIds: string[],
+  date: string,
+  startTime: string,
+  lengthHours: number,
+  excludeSessionId?: string,
+): Promise<OverlappingInserviceSheetMatch | null> {
+  if (!date || !startTime || trainerIds.length === 0) return null;
+
+  const timeFormats = ['YYYY-MM-DD hh:mm A', 'YYYY-MM-DD HH:mm'];
+  const start = moment(`${date} ${startTime}`.trim(), timeFormats, true);
+  if (!start.isValid()) return null;
+  const end = start.clone().add(lengthHours || 0, 'hours');
+
+  const snap = await db.collection('sessions').where('date', '==', date).get();
+
+  for (const doc of snap.docs) {
+    if (doc.id === excludeSessionId) continue;
+    const data: any = doc.data();
+    if (!data.inserviceSheetKey) continue;
+
+    const existingTrainers: string[] = Array.isArray(data.trainer) ? data.trainer : [];
+    if (!trainerIds.some((t) => t && existingTrainers.includes(t))) continue;
+
+    const existingStart = moment(`${data.date} ${data.startTime || ''}`.trim(), timeFormats, true);
+    if (!existingStart.isValid()) continue;
+    const existingEnd = existingStart.clone().add(parseFloat(data.length) || 0, 'hours');
+
+    // Standard interval-overlap test: the two ranges intersect unless one
+    // ends before or exactly when the other starts.
+    if (start.isBefore(existingEnd) && existingStart.isBefore(end)) {
+      return { sessionId: doc.id, date: data.date, startTime: data.startTime, length: parseFloat(data.length) || 0 };
     }
   }
   return null;

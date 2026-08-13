@@ -8,9 +8,13 @@ const moment = require('moment');
 import { selfCheckin } from '../controllers/checkinController';
 import { uploadSignature } from '../services/signatureStorage';
 
-// Self check-in via the electronic form closes this long after the session's
-// scheduled start — after that, a trainer must add a late employee manually
-// (the { employeeId } path below), since the trainer is vouching for them.
+// Self check-in via the electronic form is only open for a window around the
+// session's scheduled start — opens this many minutes early (so employees can
+// scan the QR code and be checked in as soon as the session actually starts),
+// and closes this many minutes after (after that, a trainer must add a late
+// employee manually via the { employeeId } path below, since the trainer is
+// vouching for them).
+const SELF_CHECKIN_EARLY_BUFFER_MINUTES = 15;
 const SELF_CHECKIN_GRACE_MINUTES = 1;
 
 // POST /api/checkin
@@ -46,10 +50,17 @@ router.post('/', async (req, res) => {
         true
       );
       if (scheduledStart.isValid()) {
-        const cutoff = scheduledStart.clone().add(SELF_CHECKIN_GRACE_MINUTES, 'minutes');
-        if (moment().isAfter(cutoff)) {
+        const windowOpensAt = scheduledStart.clone().subtract(SELF_CHECKIN_EARLY_BUFFER_MINUTES, 'minutes');
+        const windowClosesAt = scheduledStart.clone().add(SELF_CHECKIN_GRACE_MINUTES, 'minutes');
+        const now = moment();
+        if (now.isBefore(windowOpensAt)) {
           return res.status(403).json({
-            message: `Self check-in has closed — it's only available within ${SELF_CHECKIN_GRACE_MINUTES} minute(s) of the session's start time. Ask your trainer to add you manually.`,
+            message: `Self check-in isn't open yet — it opens ${SELF_CHECKIN_EARLY_BUFFER_MINUTES} minutes before the session's start time.`,
+          });
+        }
+        if (now.isAfter(windowClosesAt)) {
+          return res.status(403).json({
+            message: `Self check-in has closed — it was only available until ${SELF_CHECKIN_GRACE_MINUTES} minute(s) after the session's start time. Ask your trainer to add you manually.`,
           });
         }
       }
