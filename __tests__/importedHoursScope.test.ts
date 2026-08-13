@@ -27,6 +27,10 @@ describe('Bulk-imported hours: count for compliance, excluded from incentive', (
       name: 'Imported Hours Test',
       homeLocation: 'MCAC',
       isActive: true,
+      // A cert on file — this test targets the imported-hours/incentive
+      // split, not the separate certificationStatus gate (see
+      // certificationGating.test.ts).
+      certifications: [{ type: 'Lifeguarding', expirationDate: '2099-01-01' }],
     });
     createdEmployeeIds.push(ref.id);
 

@@ -4,6 +4,7 @@ const router = express.Router();
 const { db } = require('../config/firebase');
 const { clampSitesToScope } = require('../services/authService');
 import { parseLocalDate } from '../utils/dateParsing';
+import { hasCertificationOnFile } from '../utils/certificationStatus';
 
 // Get training hours by location
 router.get('/training-hours-by-location', async (req, res) => {
@@ -163,6 +164,9 @@ router.get('/stats', async (req: any, res) => {
       // Some supervisors are exempt from the 4-hour inservice requirement —
       // leave them off the roster this endpoint tracks entirely.
       if (employeeData.isExemptFromHoursRequirement) continue;
+      // A newly added/imported employee with no certification on file yet
+      // isn't tracked for compliance until one is added.
+      if (!hasCertificationOnFile(employeeData)) continue;
 
       // Calculate total hours from training sessions (length is stored in hours,
       // consistent with reports.ts, employeeSelfServiceController, and the session close-out pipeline).

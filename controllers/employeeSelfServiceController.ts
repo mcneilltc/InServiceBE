@@ -3,6 +3,7 @@ import { db } from '../config/firebase';
 import moment from 'moment';
 import { getEmployeeIncentiveSummary, SessionRecord, isBulkImportedSession } from '../services/incentiveService';
 import { parseLocalDate } from '../utils/dateParsing';
+import { hasCertificationOnFile } from '../utils/certificationStatus';
 
 const MIDMONTH_THRESHOLD = 2;
 const MONTHLY_THRESHOLD = 4;
@@ -74,7 +75,23 @@ async function resolveSessionsWithTrainerNames(
 
 // Shared compliance computation for one employee's this-month hours, used by both the
 // self-service lookup and the manager-facing employee detail endpoint.
-function computeCompliance(totalHoursThisMonth: number) {
+function computeCompliance(totalHoursThisMonth: number, hasCertification: boolean) {
+  // A newly added/imported employee with no certification on file yet isn't
+  // held to the hour requirement until one is added (see certificationStatus.ts) —
+  // show a neutral status instead of flagging them as at-risk/non-compliant.
+  if (!hasCertification) {
+    return {
+      status: 'pending_certification' as const,
+      message: 'No certification on file yet — inservice hour tracking begins once your Lifeguard certification is added.',
+      hoursThisMonth: totalHoursThisMonth,
+      hoursRemaining: 0,
+      midMonthCompliant: true,
+      monthlyCompliant: true,
+      month: moment().format('MMMM YYYY'),
+      thresholds: { midMonth: MIDMONTH_THRESHOLD, endOfMonth: MONTHLY_THRESHOLD },
+    };
+  }
+
   const today = moment().date();
   const isMidMonthPassed = today >= 15;
   const midMonthCompliant = totalHoursThisMonth >= MIDMONTH_THRESHOLD;
@@ -222,7 +239,7 @@ export const lookupEmployee = async (req: Request, res: Response, next: NextFunc
 
     res.json({
       employee: shapeEmployeeForResponse(employeeId, employeeData, firstName, lastName),
-      compliance: computeCompliance(totalHoursThisMonth),
+      compliance: computeCompliance(totalHoursThisMonth, hasCertificationOnFile(employeeData)),
       sessions,
       incentive,
     });
@@ -252,7 +269,7 @@ export const getEmployeeDetailForManager = async (req: Request, res: Response, n
 
     res.json({
       employee: shapeEmployeeForResponse(employeeId, employeeData),
-      compliance: computeCompliance(totalHoursThisMonth),
+      compliance: computeCompliance(totalHoursThisMonth, hasCertificationOnFile(employeeData)),
       sessions,
       incentive,
     });

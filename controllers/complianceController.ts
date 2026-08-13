@@ -4,6 +4,7 @@ import * as admin from 'firebase-admin';
 import moment from 'moment';
 import { sendEmail, midMonthEmployeeTemplate, managerMidMonthAlertTemplate } from '../services/messagingService';
 import { parseLocalDate } from '../utils/dateParsing';
+import { hasCertificationOnFile } from '../utils/certificationStatus';
 
 const MIDMONTH_THRESHOLD = 2;   // hours required by the 15th
 const MONTHLY_THRESHOLD  = 4;   // hours required by end of month
@@ -70,6 +71,9 @@ export async function computeComplianceBySiteForMonth(monthMoment: moment.Moment
     // leave them out of compliance entirely rather than showing them as
     // perpetually "zero"/non-compliant.
     if (data.isExemptFromHoursRequirement) return;
+    // A newly added/imported employee with no certification on file yet
+    // isn't tracked for compliance until one is added (see certificationStatus.ts).
+    if (!hasCertificationOnFile(data)) return;
 
     const hours = await getEmployeeHoursForMonth(doc.id, monthStart, monthEnd);
 
@@ -173,6 +177,7 @@ export const sendMidMonthNotices = async (req: Request, res: Response, next: Nex
     for (const doc of employeesSnap.docs) {
       const data = doc.data();
       if (data.isExemptFromHoursRequirement) continue;
+      if (!hasCertificationOnFile(data)) continue;
       const hours = await getEmployeeHoursForMonth(doc.id, monthStart, monthEnd);
       if (hours < MIDMONTH_THRESHOLD) {
         needsNotice.push({ id: doc.id, name: data.name || `${data.firstName} ${data.lastName}`.trim(), email: data.email || '', location: data.homeLocation || (data.locations && data.locations[0]) || data.location || 'Unknown', hours });
@@ -220,6 +225,7 @@ export const sendEndOfMonthAlerts = async (req: Request, res: Response, next: Ne
     for (const doc of employeesSnap.docs) {
       const data = doc.data();
       if (data.isExemptFromHoursRequirement) continue;
+      if (!hasCertificationOnFile(data)) continue;
       const hours = await getEmployeeHoursForMonth(doc.id, monthStart, monthEnd);
       if (hours < MONTHLY_THRESHOLD) {
         atRisk.push({ id: doc.id, name: data.name || `${data.firstName} ${data.lastName}`.trim(), email: data.email || '', location: data.homeLocation || (data.locations && data.locations[0]) || data.location || 'Unknown', hours });

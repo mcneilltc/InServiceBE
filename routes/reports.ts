@@ -4,6 +4,7 @@ const router = express.Router();
 const { db } = require('../config/firebase');
 const { clampSitesToScope } = require('../services/authService');
 import { parseLocalDate } from '../utils/dateParsing';
+import { hasCertificationOnFile } from '../utils/certificationStatus';
 
 // Get report data with filters
 router.get('/', async (req: any, res) => {
@@ -150,8 +151,10 @@ router.get('/hours', async (req: any, res) => {
       totalHours = Math.round(totalHours * 10) / 10;
 
       const isExempt = !!data.isExemptFromHoursRequirement;
+      const hasCert = hasCertificationOnFile(data);
       let status: string;
       if (isExempt) status = 'exempt';
+      else if (!hasCert) status = 'pendingCertification';
       else if (totalHours >= REQUIRED_HOURS) status = 'complete';
       else if (totalHours >= REQUIRED_HOURS * 0.75) status = 'atRisk';
       else status = 'incomplete';
@@ -163,7 +166,7 @@ router.get('/hours', async (req: any, res) => {
         location,
         totalHours,
         requiredHours: REQUIRED_HOURS,
-        hoursLeft: isExempt ? 0 : Math.max(0, REQUIRED_HOURS - totalHours),
+        hoursLeft: (isExempt || !hasCert) ? 0 : Math.max(0, REQUIRED_HOURS - totalHours),
         status,
         isExempt,
       });
