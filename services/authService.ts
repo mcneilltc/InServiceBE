@@ -28,6 +28,9 @@ const resolveRole = async (email: string) => {
       employeeId: matchedSupervisor.id,
       supervisorScope: employee.supervisorScope || 'locations',
       supervisorLocations: employee.supervisorScope === 'all' ? [] : (employee.locations || []),
+      // Only false when an admin has explicitly revoked it — missing/undefined
+      // (pre-existing supervisors) defaults to allowed.
+      canAddManualHours: employee.canAddManualHours !== false,
     };
   }
 

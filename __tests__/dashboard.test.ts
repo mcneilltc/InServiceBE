@@ -126,6 +126,9 @@ describe('Dashboard API', () => {
         name: 'Regular Lifeguard',
         homeLocation: 'MCAC',
         isActive: true,
+        // A cert on file — this test targets the exemption flag, not the
+        // separate certificationStatus gate (see certificationGating.test.ts).
+        certifications: [{ type: 'Lifeguarding', expirationDate: '2099-01-01' }],
       });
 
       const response = await request(app)

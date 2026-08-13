@@ -4,6 +4,7 @@ import * as admin from 'firebase-admin';
 import moment from 'moment';
 import { sendEmail, midMonthEmployeeTemplate, managerMidMonthAlertTemplate } from '../services/messagingService';
 import { parseLocalDate } from '../utils/dateParsing';
+import { hasCertificationOnFile } from '../utils/certificationStatus';
 
 const MIDMONTH_THRESHOLD = 2;   // hours required by the 15th
 const MONTHLY_THRESHOLD  = 4;   // hours required by end of month
@@ -29,7 +30,7 @@ interface SiteSummary {
 }
 
 // Calculate training hours for an employee within a date range
-async function getEmployeeHoursForMonth(employeeId: string, monthStart: Date, monthEnd: Date): Promise<number> {
+export async function getEmployeeHoursForMonth(employeeId: string, monthStart: Date, monthEnd: Date): Promise<number> {
   const sessionsSnap = await db
     .collection('employees')
     .doc(employeeId)
@@ -70,6 +71,9 @@ export async function computeComplianceBySiteForMonth(monthMoment: moment.Moment
     // leave them out of compliance entirely rather than showing them as
     // perpetually "zero"/non-compliant.
     if (data.isExemptFromHoursRequirement) return;
+    // A newly added/imported employee with no certification on file yet
+    // isn't tracked for compliance until one is added (see certificationStatus.ts).
+    if (!hasCertificationOnFile(data)) return;
 
     const hours = await getEmployeeHoursForMonth(doc.id, monthStart, monthEnd);
 
@@ -173,6 +177,7 @@ export const sendMidMonthNotices = async (req: Request, res: Response, next: Nex
     for (const doc of employeesSnap.docs) {
       const data = doc.data();
       if (data.isExemptFromHoursRequirement) continue;
+      if (!hasCertificationOnFile(data)) continue;
       const hours = await getEmployeeHoursForMonth(doc.id, monthStart, monthEnd);
       if (hours < MIDMONTH_THRESHOLD) {
         needsNotice.push({ id: doc.id, name: data.name || `${data.firstName} ${data.lastName}`.trim(), email: data.email || '', location: data.homeLocation || (data.locations && data.locations[0]) || data.location || 'Unknown', hours });
@@ -189,6 +194,11 @@ export const sendMidMonthNotices = async (req: Request, res: Response, next: Nex
       const html = midMonthEmployeeTemplate(emp, emp.hours, []);
       const r = await sendEmail(emp.email, 'Action Required: Inservice Hours Needed', html);
       sendResults.push({ to: emp.email, result: r });
+      // Recorded per-employee so the compliance letter can cite the actual
+      // date this reminder went out, instead of an unverifiable claim.
+      if (r.ok) {
+        await db.collection('employees').doc(emp.id).update({ lastMidMonthNoticeSentAt: new Date().toISOString() });
+      }
     }
 
     // Send manager alerts for zeros
@@ -220,6 +230,7 @@ export const sendEndOfMonthAlerts = async (req: Request, res: Response, next: Ne
     for (const doc of employeesSnap.docs) {
       const data = doc.data();
       if (data.isExemptFromHoursRequirement) continue;
+      if (!hasCertificationOnFile(data)) continue;
       const hours = await getEmployeeHoursForMonth(doc.id, monthStart, monthEnd);
       if (hours < MONTHLY_THRESHOLD) {
         atRisk.push({ id: doc.id, name: data.name || `${data.firstName} ${data.lastName}`.trim(), email: data.email || '', location: data.homeLocation || (data.locations && data.locations[0]) || data.location || 'Unknown', hours });

@@ -77,6 +77,17 @@ export const getEmployeeSessions = async (req: Request, res: Response, next: Nex
 
 export const createSession = async (req: any, res: Response, next: NextFunction) => {
   try {
+    // This is the single endpoint behind both the Manage Employees "Add Hours"
+    // dialog and the Excel import's historical-hours step — gating it here
+    // covers both surfaces at once. Only false when an admin has explicitly
+    // revoked it on this supervisor's employee record (see authService.ts);
+    // trainers and unrevoked supervisors are unaffected.
+    if (req.user?.canAddManualHours === false) {
+      return res.status(403).json({
+        message: 'You do not have permission to manually add hours for employees. Contact an administrator to request access.',
+      });
+    }
+
     const { date, location, startTime, length, topics, trainer, trainees } = req.body;
     const { employeeId } = req.params;
 

@@ -44,6 +44,9 @@ describe('Date-only strings parse as local midnight, not UTC', () => {
       name: 'Day One Test',
       homeLocation: 'MCAC',
       isActive: true,
+      // A cert on file — this test targets the date-parsing fix, not the
+      // separate certificationStatus gate (see certificationGating.test.ts).
+      certifications: [{ type: 'Lifeguarding', expirationDate: '2099-01-01' }],
     });
     createdEmployeeIds.push(ref.id);
 

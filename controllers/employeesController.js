@@ -37,6 +37,12 @@ const employeeSchema = z.object({
     // inservice requirement — when set, they're left out of compliance
     // tracking, alerts, and reminder emails entirely (see complianceController.ts).
     isExemptFromHoursRequirement: z.boolean().optional(),
+    // Gates the Add Hours dialog and the historical-hours step of the Excel
+    // import (both hit POST /api/training-sessions/:employeeId) — see
+    // trainingSessionsController.createSession. Only meaningful for
+    // supervisors; defaults to true so existing supervisors keep today's
+    // behavior unless explicitly revoked.
+    canAddManualHours: z.boolean().optional(),
     // Link to a When I Work user for shift sync/pickup. Intentionally NOT
     // settable here directly by callers — set only via the WIW link/backfill
     // flow (services/wheniworkService.ts), same as passwordHash below is only
@@ -73,6 +79,7 @@ const updateEmployeeSchema = z.object({
     // inservice requirement — when set, they're left out of compliance
     // tracking, alerts, and reminder emails entirely (see complianceController.ts).
     isExemptFromHoursRequirement: z.boolean().optional(),
+    canAddManualHours: z.boolean().optional(),
     wheniworkUserId: z.string().nullable().optional(),
   })
 });
@@ -122,7 +129,8 @@ const createEmployee = async (req, res, next) => {
       name, email, alternateEmails, position, phone, hireDate, locations, homeLocation, certifications, isActive,
       depth, certificationExpiration, hasSlideCert, hasSwimCert,
       isEliteSupervisor, badgeNumber, firstName, lastName, teamId,
-      isSupervisor, supervisorScope, isTrainer, wheniworkUserId, isExemptFromHoursRequirement
+      isSupervisor, supervisorScope, isTrainer, wheniworkUserId, isExemptFromHoursRequirement,
+      canAddManualHours
     } = req.body;
 
     // Prevent duplicate records — check by badge number first (the more
@@ -178,6 +186,9 @@ const createEmployee = async (req, res, next) => {
       supervisorScope: isSupervisor ? (supervisorScope || 'locations') : null,
       isTrainer: !!isTrainer,
       isExemptFromHoursRequirement: !!isExemptFromHoursRequirement,
+      // Only meaningful for supervisors; defaults to true (existing/newly
+      // created supervisors keep the ability unless explicitly unchecked).
+      canAddManualHours: isSupervisor ? (canAddManualHours !== false) : null,
       wheniworkUserId: wheniworkUserId || null,
       // Employee login (shift pickup) credentials — only ever set via
       // routes/employeeAuth.ts (invite/set-password flow), never here.
@@ -206,7 +217,8 @@ const updateEmployee = async (req, res, next) => {
       name, email, alternateEmails, position, phone, hireDate, locations, homeLocation, certifications, isActive,
       depth, certificationExpiration, hasSlideCert, hasSwimCert,
       isEliteSupervisor, badgeNumber, firstName, lastName, teamId,
-      isSupervisor, supervisorScope, isTrainer, wheniworkUserId, isExemptFromHoursRequirement
+      isSupervisor, supervisorScope, isTrainer, wheniworkUserId, isExemptFromHoursRequirement,
+      canAddManualHours
     } = req.body;
 
     const docRef = db.collection('employees').doc(id);
@@ -247,6 +259,7 @@ const updateEmployee = async (req, res, next) => {
     }
     if (isTrainer !== undefined) updateData.isTrainer = isTrainer;
     if (isExemptFromHoursRequirement !== undefined) updateData.isExemptFromHoursRequirement = isExemptFromHoursRequirement;
+    if (canAddManualHours !== undefined) updateData.canAddManualHours = canAddManualHours;
     if (wheniworkUserId !== undefined) updateData.wheniworkUserId = wheniworkUserId;
     updateData.updatedAt = new Date().toISOString();
 

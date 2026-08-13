@@ -17,6 +17,10 @@ describe('Hours-exempt supervisors are excluded from compliance tracking', () =>
       name: 'Test Employee',
       homeLocation: 'ERRC',
       isActive: true,
+      // A certification on file by default — these tests target the exemption
+      // flag specifically, not the separate certificationStatus gate (see
+      // certificationGating.test.ts).
+      certifications: [{ type: 'Lifeguarding', expirationDate: '2099-01-01' }],
       ...overrides,
     });
     createdEmployeeIds.push(ref.id);

@@ -29,6 +29,9 @@ describe('Employee self-service lookup / manager detail', () => {
       badgeNumber: `TEST-${Math.random().toString(36).slice(2, 8)}`,
       homeLocation: 'MCAC',
       isActive: true,
+      // A cert on file — these tests target the shared-read refactor, not the
+      // separate certificationStatus gate (see certificationGating.test.ts).
+      certifications: [{ type: 'Lifeguarding', expirationDate: '2099-01-01' }],
       ...overrides,
     });
     createdEmployeeIds.push(ref.id);
