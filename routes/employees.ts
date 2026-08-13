@@ -5,11 +5,13 @@ const { requireRole } = require('../middleware/requireRole');
 const {
   employeeSchema,
   updateEmployeeSchema,
+  bulkManualHoursPermissionSchema,
   getAllEmployees,
   getEmployeeById,
   createEmployee,
   updateEmployee,
-  deleteEmployee
+  deleteEmployee,
+  bulkUpdateManualHoursPermission
 } = require('../controllers/employeesController');
 
 // Self-service lookup controller (badge + firstName/lastName or legacy name lookup)
@@ -28,6 +30,11 @@ router.get('/:id/detail', requireRole(['supervisor']), getEmployeeDetailForManag
 router.post('/', requireRole(['supervisor']), validate(employeeSchema), createEmployee);
 router.put('/:id', requireRole(['supervisor']), validate(updateEmployeeSchema), updateEmployee);
 router.delete('/:id', requireRole(['supervisor']), deleteEmployee);
+
+// Bulk toggle of canAddManualHours across many supervisors at once — the
+// Manage Employees "Manual Hours Permissions" dialog, so an admin doesn't
+// have to open each supervisor's edit dialog one at a time.
+router.patch('/manual-hours-permissions', requireRole(['supervisor']), validate(bulkManualHoursPermissionSchema), bulkUpdateManualHoursPermission);
 
 // Self-service lookup — public, no auth (badge-number check-in flow)
 router.post('/lookup', lookupEmployee);

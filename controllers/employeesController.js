@@ -84,6 +84,15 @@ const updateEmployeeSchema = z.object({
   })
 });
 
+const bulkManualHoursPermissionSchema = z.object({
+  body: z.object({
+    updates: z.array(z.object({
+      employeeId: z.string().min(1),
+      canAddManualHours: z.boolean(),
+    })).min(1, "At least one update is required"),
+  })
+});
+
 // Controllers
 const getAllEmployees = async (req, res, next) => {
   try {
@@ -274,6 +283,50 @@ const updateEmployee = async (req, res, next) => {
   }
 };
 
+// Bulk toggle of canAddManualHours across many supervisors at once (the
+// Manage Employees "Manual Hours Permissions" dialog) — one round trip and
+// one Firestore batch instead of N individual PUTs. Validates every target
+// up front so this either fully applies or fully rejects, rather than
+// silently skipping some rows an admin wouldn't necessarily notice.
+const bulkUpdateManualHoursPermission = async (req, res, next) => {
+  try {
+    const { updates } = req.body;
+
+    const docs = await Promise.all(
+      updates.map((u) => db.collection('employees').doc(u.employeeId).get())
+    );
+
+    const notFound = [];
+    const notSupervisors = [];
+    docs.forEach((doc, i) => {
+      if (!doc.exists) notFound.push(updates[i].employeeId);
+      else if (!doc.data().isSupervisor) notSupervisors.push(updates[i].employeeId);
+    });
+
+    if (notFound.length > 0 || notSupervisors.length > 0) {
+      return res.status(400).json({
+        message: 'Some employees could not be updated — this permission only applies to supervisors.',
+        notFound,
+        notSupervisors,
+      });
+    }
+
+    const batch = db.batch();
+    const updatedAt = new Date().toISOString();
+    updates.forEach((u) => {
+      batch.update(db.collection('employees').doc(u.employeeId), {
+        canAddManualHours: u.canAddManualHours,
+        updatedAt,
+      });
+    });
+    await batch.commit();
+
+    res.json({ message: `Updated ${updates.length} supervisor(s)`, updatedCount: updates.length });
+  } catch (error) {
+    next(error);
+  }
+};
+
 const deleteEmployee = async (req, res, next) => {
   try {
     const { id } = req.params;
@@ -299,9 +352,11 @@ const deleteEmployee = async (req, res, next) => {
 module.exports = {
   employeeSchema,
   updateEmployeeSchema,
+  bulkManualHoursPermissionSchema,
   getAllEmployees,
   getEmployeeById,
   createEmployee,
   updateEmployee,
-  deleteEmployee
+  deleteEmployee,
+  bulkUpdateManualHoursPermission
 };

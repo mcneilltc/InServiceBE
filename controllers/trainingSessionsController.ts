@@ -79,13 +79,21 @@ export const createSession = async (req: any, res: Response, next: NextFunction)
   try {
     // This is the single endpoint behind both the Manage Employees "Add Hours"
     // dialog and the Excel import's historical-hours step — gating it here
-    // covers both surfaces at once. Only false when an admin has explicitly
-    // revoked it on this supervisor's employee record (see authService.ts);
-    // trainers and unrevoked supervisors are unaffected.
-    if (req.user?.canAddManualHours === false) {
-      return res.status(403).json({
-        message: 'You do not have permission to manually add hours for employees. Contact an administrator to request access.',
-      });
+    // covers both surfaces at once. Checked live against Firestore rather
+    // than req.user.canAddManualHours (the session JWT's baked-in claim) —
+    // that claim is only refreshed on login or requireRole's sliding
+    // mid-session renewal (which re-signs the *same* claims), so an admin
+    // revoking this flag would otherwise have no effect on a supervisor's
+    // already-active session for up to ~12 hours. Trainers are unaffected
+    // regardless (the flag only ever applies to supervisors).
+    if (req.user?.role === 'supervisor') {
+      const supervisorDoc = await db.collection('employees').doc(req.user.employeeId).get();
+      const liveCanAddManualHours = supervisorDoc.exists ? supervisorDoc.data()?.canAddManualHours !== false : true;
+      if (!liveCanAddManualHours) {
+        return res.status(403).json({
+          message: 'You do not have permission to manually add hours for employees. Contact an administrator to request access.',
+        });
+      }
     }
 
     const { date, location, startTime, length, topics, trainer, trainees } = req.body;
