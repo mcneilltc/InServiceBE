@@ -84,6 +84,7 @@ async function completeLogin(res: any, email: string, name: string | null, provi
     role: resolved.role,
     supervisorScope: resolved.supervisorScope || null,
     supervisorLocations: resolved.supervisorLocations || [],
+    canAddManualHours: resolved.canAddManualHours ?? null,
     employeeId: resolved.employeeId || null,
     provider: provider || null,
     accessToken: accessToken || null,

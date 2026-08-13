@@ -127,6 +127,7 @@ if (process.env.ENABLE_DEV_LOGIN === 'true' && process.env.NODE_ENV !== 'product
       role: resolved.role,
       supervisorScope: resolved.supervisorScope || null,
       supervisorLocations: resolved.supervisorLocations || [],
+      canAddManualHours: resolved.canAddManualHours ?? null,
       employeeId: resolved.employeeId || null,
     };
     const token = jwt.sign(claims, process.env.SESSION_SECRET, { expiresIn: SESSION_MAX_AGE_SECONDS });
