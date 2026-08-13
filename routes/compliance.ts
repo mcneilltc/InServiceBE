@@ -1,5 +1,6 @@
 import express from 'express';
 import { getComplianceStatus, sendMidMonthNotices, sendEndOfMonthAlerts } from '../controllers/complianceController';
+import { sendComplianceLetter } from '../controllers/complianceLetterController';
 
 const router = express.Router();
 
@@ -9,5 +10,8 @@ router.get('/status', getComplianceStatus);
 // Manual triggers
 router.post('/notify-midmonth', sendMidMonthNotices);
 router.post('/notify-endofmonth', sendEndOfMonthAlerts);
+
+// Generates the compliance letter from the template and emails it to the employee.
+router.post('/letter/:employeeId/send', sendComplianceLetter);
 
 export default router;

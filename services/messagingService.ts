@@ -1,7 +1,12 @@
 const RESEND_API_KEY = process.env.RESEND_API_KEY || '';
 const FROM_EMAIL = process.env.EMAIL_FROM || 'onboarding@resend.dev';
 
-async function sendEmail(to: string, subject: string, html: string) {
+async function sendEmail(
+  to: string,
+  subject: string,
+  html: string,
+  attachments?: Array<{ filename: string; content: Buffer | string }>
+) {
   if (!RESEND_API_KEY) {
     console.warn('RESEND_API_KEY not configured — skipping sendEmail');
     return { ok: false, skipped: true };
@@ -17,7 +22,15 @@ async function sendEmail(to: string, subject: string, html: string) {
       from: FROM_EMAIL,
       to: [to],
       subject,
-      html
+      html,
+      ...(attachments && attachments.length
+        ? {
+            attachments: attachments.map((a) => ({
+              filename: a.filename,
+              content: Buffer.isBuffer(a.content) ? a.content.toString('base64') : a.content,
+            })),
+          }
+        : {}),
     })
   });
 

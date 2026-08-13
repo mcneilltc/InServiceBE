@@ -30,7 +30,7 @@ interface SiteSummary {
 }
 
 // Calculate training hours for an employee within a date range
-async function getEmployeeHoursForMonth(employeeId: string, monthStart: Date, monthEnd: Date): Promise<number> {
+export async function getEmployeeHoursForMonth(employeeId: string, monthStart: Date, monthEnd: Date): Promise<number> {
   const sessionsSnap = await db
     .collection('employees')
     .doc(employeeId)
@@ -194,6 +194,11 @@ export const sendMidMonthNotices = async (req: Request, res: Response, next: Nex
       const html = midMonthEmployeeTemplate(emp, emp.hours, []);
       const r = await sendEmail(emp.email, 'Action Required: Inservice Hours Needed', html);
       sendResults.push({ to: emp.email, result: r });
+      // Recorded per-employee so the compliance letter can cite the actual
+      // date this reminder went out, instead of an unverifiable claim.
+      if (r.ok) {
+        await db.collection('employees').doc(emp.id).update({ lastMidMonthNoticeSentAt: new Date().toISOString() });
+      }
     }
 
     // Send manager alerts for zeros
