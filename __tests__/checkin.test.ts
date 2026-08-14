@@ -3,6 +3,7 @@ const request = require('supertest');
 const app = require('../app').default;
 const { db } = require('../config/firebase');
 const moment = require('moment');
+const { authCookie } = require('./testHelpers');
 
 // Runs against the local Firestore emulator (see jest.setup.js) — safe to
 // create/delete real-looking documents here.
@@ -112,5 +113,86 @@ describe('POST /api/checkin — self check-in start-time cutoff', () => {
     });
 
     expect(response.status).toBe(200);
+  });
+});
+
+// Runs against the local Firestore emulator (see jest.setup.js).
+describe('GET /api/checkin', () => {
+  const createdEmployeeIds: string[] = [];
+  const createdCheckinIds: string[] = [];
+
+  afterEach(async () => {
+    for (const id of createdEmployeeIds.splice(0)) await db.collection('employees').doc(id).delete();
+    for (const id of createdCheckinIds.splice(0)) await db.collection('checkins').doc(id).delete();
+  });
+
+  async function makeEmployee(overrides: Record<string, any> = {}) {
+    const ref = await db.collection('employees').add({
+      name: 'Test Employee',
+      homeLocation: 'MCAC',
+      isActive: true,
+      ...overrides,
+    });
+    createdEmployeeIds.push(ref.id);
+    return ref.id;
+  }
+
+  async function makeCheckin(overrides: Record<string, any> = {}) {
+    const ref = await db.collection('checkins').add({
+      sessionId: 'session-x',
+      employeeId: 'employee-x',
+      name: 'Test Employee',
+      location: 'MCAC',
+      checkinTime: moment().subtract(1, 'day').toISOString(),
+      ...overrides,
+    });
+    createdCheckinIds.push(ref.id);
+    return ref.id;
+  }
+
+  it('only returns check-ins within the recent window, excluding older ones', async () => {
+    await makeCheckin({ checkinTime: moment().subtract(2, 'days').toISOString(), name: 'Recent Person' });
+    await makeCheckin({ checkinTime: moment().subtract(45, 'days').toISOString(), name: 'Stale Person' });
+
+    const response = await request(app).get('/api/checkin').set('Cookie', authCookie());
+
+    expect(response.status).toBe(200);
+    const names = response.body.map((c: any) => c.name);
+    expect(names).toContain('Recent Person');
+    expect(names).not.toContain('Stale Person');
+  });
+
+  it('filters by training location', async () => {
+    await makeCheckin({ location: 'MCAC', name: 'MCAC Person' });
+    await makeCheckin({ location: 'ERRC', name: 'ERRC Person' });
+
+    const response = await request(app).get('/api/checkin?location=ERRC').set('Cookie', authCookie());
+
+    expect(response.status).toBe(200);
+    const names = response.body.map((c: any) => c.name);
+    expect(names).toEqual(['ERRC Person']);
+  });
+
+  it('scopes by the checked-in employee\'s home location for a location-scoped supervisor', async () => {
+    const mcacEmployeeId = await makeEmployee({ homeLocation: 'MCAC' });
+    const errcEmployeeId = await makeEmployee({ homeLocation: 'ERRC' });
+    await makeCheckin({ employeeId: mcacEmployeeId, name: 'MCAC Homebased', location: 'Rays Splash Planet' });
+    await makeCheckin({ employeeId: errcEmployeeId, name: 'ERRC Homebased', location: 'Rays Splash Planet' });
+
+    const response = await request(app)
+      .get('/api/checkin')
+      .set('Cookie', authCookie({ role: 'supervisor', supervisorLocations: ['MCAC'] }));
+
+    expect(response.status).toBe(200);
+    const names = response.body.map((c: any) => c.name);
+    expect(names).toEqual(['MCAC Homebased']);
+  });
+
+  it('rejects a trainer (supervisor-only route)', async () => {
+    const response = await request(app)
+      .get('/api/checkin')
+      .set('Cookie', authCookie({ role: 'trainer' }));
+
+    expect(response.status).toBe(403);
   });
 });

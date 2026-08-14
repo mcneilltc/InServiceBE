@@ -1,23 +1,11 @@
-import fs from 'fs';
-import path from 'path';
 import moment from 'moment';
-import JSZip from 'jszip';
-import sharp from 'sharp';
+import { PDFDocument, StandardFonts, rgb, PDFFont, PDFPage } from 'pdf-lib';
 import { db } from '../config/firebase';
 import { getSignatureBuffer } from './signatureStorage';
-
-const TEMPLATE_PATH = path.join(__dirname, '..', 'templates', 'inserviceSheetTemplate.docx');
-
-// The one repeatable sign-in row left in the template (see
-// templates/inserviceSheetTemplate.docx) — duplicated once per checked-in
-// employee below. Must match the template's word/document.xml exactly; if
-// the template is ever re-exported from Word, re-locate this string.
-const EMPLOYEE_ROW_TEMPLATE =
-  '<w:tr w:rsidRPr="00812725" w:rsidR="007276A5" w:rsidTr="09A7D25A" w14:paraId="4101652C" w14:textId="77777777"><w:trPr><w:trHeight w:val="576"/></w:trPr><w:tc><w:tcPr><w:tcW w:w="1560" w:type="dxa"/><w:shd w:val="clear" w:color="auto" w:fill="auto"/><w:vAlign w:val="center"/></w:tcPr><w:p w:rsidRPr="00812725" w:rsidR="00812725" w:rsidP="0058334A" w:rsidRDefault="00812725" w14:paraId="4B99056E" w14:textId="09DE2D3E"><w:pPr><w:rPr><w:rFonts w:eastAsia="Batang"/></w:rPr></w:pPr><w:r><w:t>{{EMP_SITE}}</w:t></w:r></w:p></w:tc><w:tc><w:tcPr><w:tcW w:w="2454" w:type="dxa"/><w:shd w:val="clear" w:color="auto" w:fill="auto"/></w:tcPr><w:p w:rsidRPr="00812725" w:rsidR="00812725" w:rsidP="0058334A" w:rsidRDefault="00812725" w14:paraId="1299C43A" w14:textId="10ED8AD5"><w:pPr><w:rPr><w:rFonts w:eastAsia="Batang"/></w:rPr></w:pPr><w:r><w:t>{{EMP_NAME}}</w:t></w:r></w:p></w:tc><w:tc><w:tcPr><w:tcW w:w="2469" w:type="dxa"/><w:shd w:val="clear" w:color="auto" w:fill="auto"/><w:vAlign w:val="center"/></w:tcPr><w:p w:rsidRPr="00812725" w:rsidR="00812725" w:rsidP="0058334A" w:rsidRDefault="00812725" w14:paraId="4DDBEF00" w14:textId="77777777"><w:pPr><w:rPr><w:rFonts w:eastAsia="Batang"/></w:rPr></w:pPr><w:r><w:t>{{EMP_SIGNATURE}}</w:t></w:r></w:p></w:tc><w:tc><w:tcPr><w:tcW w:w="1925" w:type="dxa"/><w:shd w:val="clear" w:color="auto" w:fill="auto"/><w:vAlign w:val="center"/></w:tcPr><w:p w:rsidRPr="00812725" w:rsidR="00812725" w:rsidP="0058334A" w:rsidRDefault="00812725" w14:paraId="3461D779" w14:textId="77777777"><w:pPr><w:rPr><w:rFonts w:eastAsia="Batang"/></w:rPr></w:pPr><w:r><w:t>{{EMP_TIME_IN}}</w:t></w:r></w:p></w:tc><w:tc><w:tcPr><w:tcW w:w="1518" w:type="dxa"/><w:shd w:val="clear" w:color="auto" w:fill="auto"/><w:vAlign w:val="center"/></w:tcPr><w:p w:rsidRPr="00812725" w:rsidR="00812725" w:rsidP="0058334A" w:rsidRDefault="00812725" w14:paraId="3CF2D8B6" w14:textId="77777777"><w:pPr><w:rPr><w:rFonts w:eastAsia="Batang"/></w:rPr></w:pPr><w:r><w:t>{{EMP_TIME_OUT}}</w:t></w:r></w:p></w:tc></w:tr>';
+import { wrapText } from '../utils/pdfText';
 
 // The 12 fixed checklist labels, normalized (trimmed, lowercased, no blank
-// fill-in lines), in the same order as the template's {{TOPIC_MARK_01}}..12
-// tokens. The 13th bullet is "Other" — handled separately below.
+// fill-in lines). The 13th bullet is "Other" — handled separately below.
 const TOPIC_LABELS: string[] = [
   'conditioning',
   'unresponsive extrication',
@@ -33,14 +21,22 @@ const TOPIC_LABELS: string[] = [
   'how to use lift',
 ];
 
-function escapeXml(value: string): string {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&apos;');
-}
+// Display labels (title case, matching the original paper form) in the same
+// order as TOPIC_LABELS above.
+const TOPIC_DISPLAY_LABELS: string[] = [
+  'Conditioning',
+  'Unresponsive extrication',
+  'Back Boarding (spinal)',
+  'First Aid',
+  'Rescue Breathing',
+  'CPR/AED',
+  'Responsive Rescues',
+  'Unresponsive Rescues',
+  'Submerged Rescues',
+  'EAP',
+  'Scanning Drills',
+  'How to use lift',
+];
 
 // A session topic matches a checklist label if they're equal, or the topic
 // is a shorter, more specific substring *contained in* the label (e.g. "CPR"
@@ -55,15 +51,15 @@ function topicMatchesLabel(topicNormalized: string, label: string): boolean {
 
 // Session topics are free text (no fixed enum) — this matching is a known,
 // accepted best-effort limitation, not guaranteed exact.
-function matchTopics(topics: string[]): { marks: string[]; otherText: string } {
+function matchTopics(topics: string[]): { marks: boolean[]; otherText: string } {
   const normalized = (topics || []).map((t) => String(t || '').trim().toLowerCase()).filter(Boolean);
   const matchedTopicIndices = new Set<number>();
 
   const marks = TOPIC_LABELS.map((label) => {
     const matchIndex = normalized.findIndex((t) => topicMatchesLabel(t, label));
-    if (matchIndex === -1) return '[ ] ';
+    if (matchIndex === -1) return false;
     matchedTopicIndices.add(matchIndex);
-    return '[X] ';
+    return true;
   });
 
   const unmatched = normalized.filter((_, i) => !matchedTopicIndices.has(i));
@@ -74,12 +70,26 @@ interface InserviceSheet {
   buffer: Buffer;
 }
 
-// Fills in the org's in-service sign-in sheet template (see
-// templates/inserviceSheetTemplate.docx) with a completed session's details,
-// checked-in employees, and their captured signatures. Preserves the
-// template's formatting exactly — only {{TOKEN}} text nodes and the
-// repeatable employee row are touched, never rebuilt from scratch (same
-// technique as complianceLetterService.ts).
+const PAGE_WIDTH = 612;
+const PAGE_HEIGHT = 792;
+const MARGIN = 40;
+const CONTENT_WIDTH = PAGE_WIDTH - MARGIN * 2;
+
+// Sign-in table column layout (widths sum to CONTENT_WIDTH).
+const COLUMNS = [
+  { label: 'Site of Employment', width: 100 },
+  { label: 'Lifeguard Name', width: 140 },
+  { label: 'Signature', width: 140 },
+  { label: 'Time In', width: 62 },
+  { label: 'Time Out', width: 62 },
+];
+const ROW_HEIGHT = 30;
+const HEADER_ROW_HEIGHT = 20;
+
+// Builds the org's in-service sign-in sheet as a PDF, drawn directly with
+// pdf-lib — a completed session's details, checked-in employees, and their
+// captured signatures, laid out to match the original paper/Word form
+// (intro text, 13-item topics checklist, header fields, sign-in table).
 export async function generateInserviceSheet(sessionId: string): Promise<InserviceSheet> {
   const sessionDoc = await db.collection('sessions').doc(sessionId).get();
   if (!sessionDoc.exists) {
@@ -100,114 +110,157 @@ export async function generateInserviceSheet(sessionId: string): Promise<Inservi
   const timeLabel = session.endTime ? `${session.startTime || ''} - ${session.endTime}` : (session.startTime || '');
   const { marks: topicMarks, otherText } = matchTopics(session.topics || []);
 
-  const tokens: Record<string, string> = {
-    '{{LED_BY}}': trainerNames.join(', '),
-    '{{DATE}}': dateLabel,
-    '{{TIME}}': timeLabel,
-    '{{LOCATION}}': session.location || '',
-    '{{OTHER_TOPICS_TEXT}}': otherText,
+  const pdfDoc = await PDFDocument.create();
+  const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+
+  let page = pdfDoc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
+  let y = PAGE_HEIGHT - MARGIN;
+
+  const ensureSpace = (needed: number) => {
+    if (y - needed < MARGIN) {
+      page = pdfDoc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
+      y = PAGE_HEIGHT - MARGIN;
+    }
   };
-  topicMarks.forEach((mark, i) => {
-    tokens[`{{TOPIC_MARK_${String(i + 1).padStart(2, '0')}}}`] = mark;
-  });
-  // Bullet 13 ("Other") is marked whenever anything didn't match a fixed label.
-  tokens['{{TOPIC_MARK_13}}'] = otherText ? '[X] ' : '[ ] ';
 
-  const templateBuffer = fs.readFileSync(TEMPLATE_PATH);
-  const zip = await JSZip.loadAsync(templateBuffer);
-  const documentXmlFile = zip.file('word/document.xml');
-  if (!documentXmlFile) {
-    throw new Error('In-service sheet template is missing word/document.xml');
+  const writeParagraph = (text: string, { bold = false, size = 10, gapAfter = 8 } = {}) => {
+    const useFont = bold ? boldFont : font;
+    const lines = wrapText(useFont, text, size, CONTENT_WIDTH);
+    for (const line of lines) {
+      ensureSpace(size + 3);
+      page.drawText(line, { x: MARGIN, y, size, font: useFont, color: rgb(0, 0, 0) });
+      y -= size + 3;
+    }
+    y -= gapAfter;
+  };
+
+  // --- Header / instructions section (matches the original form's text) ---
+  ensureSpace(20);
+  page.drawText('AQUATICS IN-SERVICE FORM', { x: MARGIN, y, size: 15, font: boldFont });
+  y -= 24;
+
+  writeParagraph('Dear Aquatics Staff Members:', { bold: true, gapAfter: 4 });
+  writeParagraph(
+    'To ensure the safety of our members and program participants, you will be required to attend and participate in 4 hours of in-service on a monthly basis. In addition, you will be asked to sign the back of this form each in-service to indicate you have attended and participated in the required trainings.'
+  );
+
+  writeParagraph('Check the Training that was received:', { bold: true, gapAfter: 4 });
+  for (let i = 0; i < TOPIC_LABELS.length; i++) {
+    ensureSpace(14);
+    const mark = topicMarks[i] ? '[X]' : '[ ]';
+    page.drawText(`${mark} ${TOPIC_DISPLAY_LABELS[i]}`, { x: MARGIN + 8, y, size: 10, font: boldFont });
+    y -= 14;
   }
-  let xml = await documentXmlFile.async('string');
+  const otherMark = otherText ? '[X]' : '[ ]';
+  ensureSpace(14);
+  page.drawText(`${otherMark} Other: ${otherText}`, { x: MARGIN + 8, y, size: 10, font: boldFont });
+  y -= 20;
 
-  for (const [token, value] of Object.entries(tokens)) {
-    xml = xml.split(token).join(escapeXml(value));
-  }
+  writeParagraph(
+    'Failure to acquire 4 hours of in-service monthly will lead to disciplinary action, up to and including termination. If you have any questions, please contact the Aquatics Supervisor at your site, immediately.',
+    { gapAfter: 16 }
+  );
 
-  if (!xml.includes(EMPLOYEE_ROW_TEMPLATE)) {
-    throw new Error('In-service sheet template employee-row marker not found — the template may have been re-saved from Word');
-  }
+  // --- Sign-in sheet section ---
+  ensureSpace(20);
+  page.drawText('Lifeguard In-Service Sign-In Sheet', { x: MARGIN, y, size: 13, font: boldFont });
+  y -= 22;
 
-  // Signatures are embedded as inline images into whichever row asks for
-  // one — the trickiest part of this service, since jszip has no OOXML
-  // awareness: adding an image means writing a new media part, a new
-  // relationship, and a <w:drawing> fragment referencing it, all by hand.
-  const relsFile = zip.file('word/_rels/document.xml.rels');
-  if (!relsFile) {
-    throw new Error('In-service sheet template is missing word/_rels/document.xml.rels');
-  }
-  let relsXml = await relsFile.async('string');
+  ensureSpace(16);
+  page.drawText(`Led By: ${trainerNames.join(', ')}`, { x: MARGIN, y, size: 10, font: boldFont });
+  page.drawText(`Date: ${dateLabel}`, { x: MARGIN + 280, y, size: 10, font: boldFont });
+  y -= 16;
+  ensureSpace(16);
+  page.drawText(`Time: ${timeLabel}`, { x: MARGIN, y, size: 10, font: boldFont });
+  page.drawText(`Location: ${session.location || ''}`, { x: MARGIN + 280, y, size: 10, font: boldFont });
+  y -= 20;
 
-  const EMU_PER_IN = 914400;
-  const MAX_CX = 1.5 * EMU_PER_IN;
-  const MAX_CY = 0.4 * EMU_PER_IN;
-  let signatureIndex = 0;
+  const drawTableHeader = () => {
+    ensureSpace(HEADER_ROW_HEIGHT);
+    let x = MARGIN;
+    page.drawRectangle({ x: MARGIN, y: y - HEADER_ROW_HEIGHT, width: CONTENT_WIDTH, height: HEADER_ROW_HEIGHT, color: rgb(0.85, 0.85, 0.85) });
+    for (const col of COLUMNS) {
+      page.drawText(col.label, { x: x + 4, y: y - HEADER_ROW_HEIGHT + 6, size: 9, font: boldFont });
+      x += col.width;
+    }
+    drawRowBorders(page, y, HEADER_ROW_HEIGHT);
+    y -= HEADER_ROW_HEIGHT;
+  };
 
-  const rowsXml = await Promise.all(checkins.map(async (checkin) => {
-    let signatureFragment = '';
+  drawTableHeader();
+
+  const EMU_CAP_WIDTH = 120;
+  const EMU_CAP_HEIGHT = 22;
+
+  for (const checkin of checkins) {
+    ensureSpace(ROW_HEIGHT);
+    // A page break mid-table must repeat the column headers so the new
+    // page's rows aren't unlabeled.
+    if (y - ROW_HEIGHT < MARGIN) {
+      drawTableHeader();
+    }
+
+    let x = MARGIN;
+    const textY = y - ROW_HEIGHT + 10;
+    page.drawText(truncateToWidth(font, checkin.location || '', 9, COLUMNS[0].width - 8), { x: x + 4, y: textY, size: 9, font });
+    x += COLUMNS[0].width;
+    page.drawText(truncateToWidth(font, checkin.name || '', 9, COLUMNS[1].width - 8), { x: x + 4, y: textY, size: 9, font });
+    x += COLUMNS[1].width;
+
     if (checkin.signatureKey) {
       try {
-        const buffer = await getSignatureBuffer(checkin.signatureKey);
-        const meta = await sharp(buffer).metadata();
-        const width = meta.width || 1;
-        const height = meta.height || 1;
-        const aspect = width / height;
-        let cx = MAX_CX;
-        let cy = Math.round(cx / aspect);
-        if (cy > MAX_CY) {
-          cy = MAX_CY;
-          cx = Math.round(cy * aspect);
+        const sigBuffer = await getSignatureBuffer(checkin.signatureKey);
+        const sigImage = await pdfDoc.embedPng(sigBuffer);
+        const aspect = sigImage.width / sigImage.height;
+        let cx = EMU_CAP_WIDTH;
+        let cy = cx / aspect;
+        if (cy > EMU_CAP_HEIGHT) {
+          cy = EMU_CAP_HEIGHT;
+          cx = cy * aspect;
         }
-
-        signatureIndex += 1;
-        const n = signatureIndex;
-        const mediaName = `signature_${n}.png`;
-        const relId = `rIdSig${n}`;
-        const docPrId = 5000 + n;
-
-        zip.file(`word/media/${mediaName}`, buffer);
-        relsXml = relsXml.replace(
-          '</Relationships>',
-          `<Relationship Id="${relId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/${mediaName}"/></Relationships>`
-        );
-
-        signatureFragment =
-          `<w:r><w:rPr><w:noProof/></w:rPr><w:drawing>` +
-          `<wp:inline distT="0" distB="0" distL="0" distR="0">` +
-          `<wp:extent cx="${cx}" cy="${cy}"/>` +
-          `<wp:effectExtent l="0" t="0" r="0" b="0"/>` +
-          `<wp:docPr id="${docPrId}" name="Signature${n}"/>` +
-          `<wp:cNvGraphicFramePr><a:graphicFrameLocks noChangeAspect="1"/></wp:cNvGraphicFramePr>` +
-          `<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">` +
-          `<pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">` +
-          `<pic:nvPicPr><pic:cNvPr id="${docPrId}" name="${mediaName}"/><pic:cNvPicPr/></pic:nvPicPr>` +
-          `<pic:blipFill><a:blip r:embed="${relId}"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>` +
-          `<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm>` +
-          `<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr>` +
-          `</pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>`;
+        page.drawImage(sigImage, { x: x + 4, y: y - ROW_HEIGHT + (ROW_HEIGHT - cy) / 2, width: cx, height: cy });
       } catch (error) {
         console.warn(`Failed to embed signature for checkin ${checkin.id}:`, (error as Error).message);
-        signatureFragment = '';
       }
     }
+    x += COLUMNS[2].width;
 
     const timeIn = checkin.checkinTime ? moment(checkin.checkinTime).format('h:mm A') : '';
     const timeOut = session.closedAt ? moment(session.closedAt).format('h:mm A') : '';
+    page.drawText(timeIn, { x: x + 4, y: textY, size: 9, font });
+    x += COLUMNS[3].width;
+    page.drawText(timeOut, { x: x + 4, y: textY, size: 9, font });
 
-    return EMPLOYEE_ROW_TEMPLATE
-      .replace('{{EMP_SITE}}', escapeXml(checkin.location || ''))
-      .replace('{{EMP_NAME}}', escapeXml(checkin.name || ''))
-      .replace('<w:r><w:t>{{EMP_SIGNATURE}}</w:t></w:r>', signatureFragment)
-      .replace('{{EMP_TIME_IN}}', escapeXml(timeIn))
-      .replace('{{EMP_TIME_OUT}}', escapeXml(timeOut));
-  }));
+    drawRowBorders(page, y, ROW_HEIGHT);
+    y -= ROW_HEIGHT;
+  }
 
-  xml = xml.replace(EMPLOYEE_ROW_TEMPLATE, rowsXml.join(''));
-
-  zip.file('word/document.xml', xml);
-  zip.file('word/_rels/document.xml.rels', relsXml);
-  const buffer = await zip.generateAsync({ type: 'nodebuffer' });
-
+  const buffer = Buffer.from(await pdfDoc.save());
   return { buffer };
+}
+
+// Draws the grid lines (outer box + column dividers) for one table row —
+// shared by the header row and every data row so the whole table lines up.
+function drawRowBorders(page: PDFPage, topY: number, height: number) {
+  const bottomY = topY - height;
+  let x = MARGIN;
+  page.drawLine({ start: { x: MARGIN, y: topY }, end: { x: MARGIN + CONTENT_WIDTH, y: topY }, thickness: 0.5, color: rgb(0, 0, 0) });
+  page.drawLine({ start: { x: MARGIN, y: bottomY }, end: { x: MARGIN + CONTENT_WIDTH, y: bottomY }, thickness: 0.5, color: rgb(0, 0, 0) });
+  for (const col of COLUMNS) {
+    page.drawLine({ start: { x, y: topY }, end: { x, y: bottomY }, thickness: 0.5, color: rgb(0, 0, 0) });
+    x += col.width;
+  }
+  page.drawLine({ start: { x, y: topY }, end: { x, y: bottomY }, thickness: 0.5, color: rgb(0, 0, 0) });
+}
+
+// Cells are single-line — a name/location too long for its column is
+// truncated with an ellipsis rather than overflowing into the next column.
+function truncateToWidth(font: PDFFont, text: string, size: number, maxWidth: number): string {
+  if (font.widthOfTextAtSize(text, size) <= maxWidth) return text;
+  let truncated = text;
+  while (truncated.length > 1 && font.widthOfTextAtSize(`${truncated}…`, size) > maxWidth) {
+    truncated = truncated.slice(0, -1);
+  }
+  return `${truncated}…`;
 }

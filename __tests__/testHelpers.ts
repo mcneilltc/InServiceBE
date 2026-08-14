@@ -1,15 +1,17 @@
 const jwt = require('jsonwebtoken');
 
-// A signed session cookie for a supervisor — the superset role, so it
-// satisfies both requireRole(['supervisor']) and requireRole(['supervisor','trainer'])
-// gates. These tests exercise route/controller logic, not the auth layer itself
-// (that's covered separately), so one fixed authenticated identity is enough.
+// A signed session cookie for an admin — the top of the role hierarchy (see
+// utils/roles.ts), so it satisfies every requireRole(rolesAtLeast(...)) gate
+// in the app, including the two admin-only ones (role changes, site
+// management). These tests exercise route/controller logic, not the auth
+// layer itself (that's covered separately), so one fixed authenticated
+// identity is enough. Override `role` (e.g. to 'supervisor' or 'trainer')
+// to test a lower tier's access.
 export function authCookie(overrides: Record<string, any> = {}): string {
   const claims = {
     email: 'test-supervisor@example.com',
     name: 'Test Supervisor',
-    role: 'supervisor',
-    supervisorScope: 'all',
+    role: 'admin',
     supervisorLocations: [],
     employeeId: null,
     trainerId: null,

@@ -1,12 +1,12 @@
 export {};
 const { db } = require('../config/firebase');
-const JSZip = require('jszip');
+const zlib = require('zlib');
 const moment = require('moment');
 const { generateComplianceLetter } = require('../services/complianceLetterService');
 
 // Runs against the local Firestore emulator (see jest.setup.js). Verifies the
-// filled-in letter's XML has every {{TOKEN}} replaced with real data and no
-// placeholders left behind, without needing to actually open it in Word.
+// generated PDF's extracted text contains the right employee/session data,
+// without needing to actually open it in a PDF viewer.
 describe('generateComplianceLetter', () => {
   const createdEmployeeIds: string[] = [];
   const createdSessionIds: string[] = [];
@@ -51,12 +51,36 @@ describe('generateComplianceLetter', () => {
     return ref.id;
   }
 
-  async function extractDocumentXml(buffer: Buffer): Promise<string> {
-    const zip = await JSZip.loadAsync(buffer);
-    return zip.file('word/document.xml').async('string');
+  // Minimal PDF text extractor tailored to pdf-lib's own output (Flate-
+  // compressed content streams, text drawn as hex strings before `Tj`) — good
+  // enough to verify our generated letters without a heavy PDF-parsing
+  // dependency.
+  function extractPdfText(buffer: Buffer): string {
+    const str = buffer.toString('latin1');
+    const streamRe = /(<<[^>]*?>>)\s*stream\r?\n([\s\S]*?)\r?\nendstream/g;
+    const lines: string[] = [];
+    let m: RegExpExecArray | null;
+    while ((m = streamRe.exec(str))) {
+      const [, dict, rawContent] = m;
+      let content = Buffer.from(rawContent, 'latin1');
+      if (dict.includes('FlateDecode')) {
+        try {
+          content = zlib.inflateSync(content);
+        } catch {
+          continue;
+        }
+      }
+      const cstr = content.toString('latin1');
+      const tjRe = /<([0-9A-Fa-f]+)>\s*Tj/g;
+      let tm: RegExpExecArray | null;
+      while ((tm = tjRe.exec(cstr))) {
+        lines.push(Buffer.from(tm[1], 'hex').toString('latin1'));
+      }
+    }
+    return lines.join('\n');
   }
 
-  it('fills in the employee name, hours missing, and upcoming sessions with no leftover tokens', async () => {
+  it('fills in the employee name, hours missing, and upcoming sessions', async () => {
     const employeeId = await makeEmployee();
     // 1 hour logged this month -> 3.0 hours missing of the 4.0 requirement.
     await db.collection('employees').doc(employeeId).collection('trainingSessions').add({
@@ -74,21 +98,21 @@ describe('generateComplianceLetter', () => {
     expect(result.hoursMissing).toBe(3);
     expect(result.employeeName).toBe('Jamie Rivera');
     expect(result.employeeEmail).toBe('jamie.rivera@example.com');
+    expect(result.buffer.subarray(0, 5).toString()).toBe('%PDF-');
 
-    const xml = await extractDocumentXml(result.buffer);
-    expect(xml).not.toContain('{{');
-    expect(xml).toContain('Good Morning Jamie');
-    expect(xml).toContain('you are behind 3.0 Inservice hours');
-    expect(xml).toContain('3.0 hours by');
-    expect(xml).toContain('Rays Splash Planet');
-    expect(xml).toContain('ERRC');
+    const text = extractPdfText(result.buffer);
+    expect(text).toContain('Good Morning Jamie');
+    expect(text).toContain('you are behind 3.0 Inservice hours');
+    expect(text).toContain('3.0 hours by');
+    expect(text).toContain('Rays Splash Planet');
+    expect(text).toContain('ERRC');
   });
 
   it('falls back to a generic contact note when no mid-month reminder has been logged', async () => {
     const employeeId = await makeEmployee();
     const result = await generateComplianceLetter(employeeId);
-    const xml = await extractDocumentXml(result.buffer);
-    expect(xml).toContain('Our records show you have not yet completed');
+    const text = extractPdfText(result.buffer);
+    expect(text).toContain('Our records show you have not yet completed');
   });
 
   it('cites the actual date once a mid-month reminder has been logged', async () => {
@@ -97,31 +121,31 @@ describe('generateComplianceLetter', () => {
     // issue documented in utils/dateParsing.ts.
     const employeeId = await makeEmployee({ lastMidMonthNoticeSentAt: '2026-08-01T16:00:00.000Z' });
     const result = await generateComplianceLetter(employeeId);
-    const xml = await extractDocumentXml(result.buffer);
-    expect(xml).toContain('On August 1, 2026, you were sent an email reminder');
+    const text = extractPdfText(result.buffer);
+    expect(text).toContain('On August 1, 2026, you were sent an email reminder');
   });
 
   it('shows a fallback note when fewer than 4 upcoming sessions exist', async () => {
     const employeeId = await makeEmployee();
     await makeScheduledSession();
     const result = await generateComplianceLetter(employeeId);
-    const xml = await extractDocumentXml(result.buffer);
-    expect(xml).toContain('Additional sessions are being scheduled');
+    const text = extractPdfText(result.buffer);
+    expect(text).toContain('Additional sessions are being scheduled');
   });
 
   it('shows a no-sessions note when nothing is scheduled', async () => {
     const employeeId = await makeEmployee();
     const result = await generateComplianceLetter(employeeId);
-    const xml = await extractDocumentXml(result.buffer);
-    expect(xml).toContain('No upcoming inservice sessions are currently scheduled');
+    const text = extractPdfText(result.buffer);
+    expect(text).toContain('No upcoming inservice sessions are currently scheduled');
   });
 
   it('excludes sessions dated in the past', async () => {
     const employeeId = await makeEmployee();
     await makeScheduledSession({ date: moment().subtract(5, 'days').format('YYYY-MM-DD'), location: 'Past Session Site' });
     const result = await generateComplianceLetter(employeeId);
-    const xml = await extractDocumentXml(result.buffer);
-    expect(xml).not.toContain('Past Session Site');
+    const text = extractPdfText(result.buffer);
+    expect(text).not.toContain('Past Session Site');
   });
 
   it('throws a 404-flavored error for an unknown employee', async () => {

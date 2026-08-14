@@ -1,6 +1,7 @@
 import express from 'express';
 import validate from '../middleware/validate';
 const { requireRole } = require('../middleware/requireRole');
+import { rolesAtLeast } from '../utils/roles';
 import {
   sessionSchema,
   getAllSessions,
@@ -11,7 +12,7 @@ import {
 
 const router = express.Router();
 
-const STAFF = ['supervisor', 'trainer'];
+const STAFF = rolesAtLeast('trainer');
 
 router.get('/', requireRole(STAFF), getAllSessions);
 

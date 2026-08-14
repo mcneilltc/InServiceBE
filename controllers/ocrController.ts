@@ -152,17 +152,16 @@ export const extractFromSheet = async (req: Request, res: Response, next: NextFu
     }
 
     // Attempt to fuzzy-match employees and trainer against existing DB records.
-    // Trainers are employees with isTrainer === true — no separate collection.
-    // Supervisors can also lead training, so they're eligible here too, even
-    // if their own isTrainer box isn't checked (that flag still controls
-    // whether they land on the separate Trainer Portal — see authService.ts).
+    // Trainers are employees with any role set (trainer/supervisor/
+    // seniorSupervisor/admin) — no separate collection. Every tier can lead
+    // training, not just the 'trainer' role itself.
     const [employeesSnap, topicsSnap] = await Promise.all([
       db.collection('employees').get(),
       db.collection('trainingTopics').get(),
     ]);
 
     const existingEmployees = employeesSnap.docs.map(d => ({ id: d.id, ...d.data() as any }));
-    const existingTrainers = existingEmployees.filter((e: any) => e.isTrainer || e.isSupervisor);
+    const existingTrainers = existingEmployees.filter((e: any) => !!e.role);
     const existingTopics = topicsSnap.docs.map(d => ({ id: d.id, ...d.data() as any }));
 
     // Match each extracted employee name against db (case-insensitive partial match)
@@ -229,9 +228,9 @@ export const extractFromSheet = async (req: Request, res: Response, next: NextFu
         employees: matchedEmployees,
       },
       lookups: {
-        trainers: existingTrainers.map((t: any) => ({ id: t.id, name: t.name, email: t.email, isSupervisor: !!t.isSupervisor })),
+        trainers: existingTrainers.map((t: any) => ({ id: t.id, name: t.name, email: t.email, role: t.role || null })),
         topics: existingTopics.map((t: any) => ({ id: t.id, name: t.name, requiresDetail: !!t.requiresDetail })),
-        employees: existingEmployees.map((e: any) => ({ id: e.id, name: e.name, email: e.email, isSupervisor: !!e.isSupervisor })),
+        employees: existingEmployees.map((e: any) => ({ id: e.id, name: e.name, email: e.email, role: e.role || null })),
       }
     });
   } catch (error) {

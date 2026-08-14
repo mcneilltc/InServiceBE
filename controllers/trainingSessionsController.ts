@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { db } from '../config/firebase';
 import { z } from 'zod';
 import moment from 'moment';
+import { rolesAtLeast } from '../utils/roles';
 
 export const sessionSchema = z.object({
   body: z.object({
@@ -79,21 +80,22 @@ export const createSession = async (req: any, res: Response, next: NextFunction)
   try {
     // This is the single endpoint behind both the Manage Employees "Add Hours"
     // dialog and the Excel import's historical-hours step — gating it here
-    // covers both surfaces at once. Checked live against Firestore rather
-    // than req.user.canAddManualHours (the session JWT's baked-in claim) —
-    // that claim is only refreshed on login or requireRole's sliding
-    // mid-session renewal (which re-signs the *same* claims), so an admin
-    // revoking this flag would otherwise have no effect on a supervisor's
+    // covers both surfaces at once. Manual-hours-adding is bundled into
+    // Senior Supervisor and up (see utils/roles.ts) — a plain Supervisor
+    // never has it. Checked live against Firestore rather than req.user.role
+    // (the session JWT's baked-in claim) — that claim is only refreshed on
+    // login or requireRole's sliding mid-session renewal (which re-signs the
+    // *same* claims), so a demotion would otherwise have no effect on an
     // already-active session for up to ~12 hours. Trainers are unaffected
-    // regardless (the flag only ever applies to supervisors).
-    if (req.user?.role === 'supervisor') {
+    // regardless (this was never gated for them).
+    if (req.user?.role && req.user.role !== 'trainer') {
       // No employeeId on the session to look up (shouldn't happen for a real
       // login — authService.resolveRole always sets it — but fall back to
       // the JWT claim rather than crashing on Firestore's .doc(falsy)).
-      const liveCanAddManualHours = req.user.employeeId
-        ? (await db.collection('employees').doc(req.user.employeeId).get()).data()?.canAddManualHours !== false
-        : req.user.canAddManualHours !== false;
-      if (!liveCanAddManualHours) {
+      const liveRole = req.user.employeeId
+        ? (await db.collection('employees').doc(req.user.employeeId).get()).data()?.role
+        : req.user.role;
+      if (!rolesAtLeast('seniorSupervisor').includes(liveRole)) {
         return res.status(403).json({
           message: 'You do not have permission to manually add hours for employees. Contact an administrator to request access.',
         });

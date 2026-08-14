@@ -108,7 +108,7 @@ describe('GET /api/topic-tally', () => {
       const response = await request(app)
         .get('/api/topic-tally/employees')
         .query({ period: 'month', month: '2026-08' })
-        .set('Cookie', authCookie({ supervisorScope: 'locations', supervisorLocations: ['MCAC'] }));
+        .set('Cookie', authCookie({ role: 'supervisor', supervisorLocations: ['MCAC'] }));
 
       const ids = response.body.rows.map((r: any) => r.id);
       expect(ids).toContain(inScope);
@@ -117,10 +117,10 @@ describe('GET /api/topic-tally', () => {
   });
 
   describe('GET /api/topic-tally/trainers', () => {
-    it('reads trainingSessionsLed independent of isTrainer/isSupervisor flags', async () => {
-      // A plain employee (neither isTrainer nor isSupervisor) who happened to
-      // lead a session — trainingSessionsLed is what matters, not the flags.
-      const empId = await makeEmployee({ name: 'Led A Session', isTrainer: false, isSupervisor: false });
+    it('reads trainingSessionsLed independent of role', async () => {
+      // A roster-only employee (no role at all) who happened to lead a
+      // session — trainingSessionsLed is what matters, not the role field.
+      const empId = await makeEmployee({ name: 'Led A Session', role: null });
       await addSession(empId, 'trainingSessionsLed', '2026-08-10', ['CPR', 'CPR']); // two topics entries in one session's array both count
 
       const response = await request(app)

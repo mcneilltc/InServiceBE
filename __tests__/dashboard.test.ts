@@ -119,7 +119,7 @@ describe('Dashboard API', () => {
         name: 'Exempt Supervisor',
         homeLocation: 'MCAC',
         isActive: true,
-        isSupervisor: true,
+        role: 'supervisor',
         isExemptFromHoursRequirement: true,
       });
       await db.collection('employees').add({

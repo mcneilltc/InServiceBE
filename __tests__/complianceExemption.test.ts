@@ -28,7 +28,7 @@ describe('Hours-exempt supervisors are excluded from compliance tracking', () =>
   }
 
   it('GET /api/compliance/status leaves an exempt employee out of allEmployees and site counts', async () => {
-    await makeEmployee({ name: 'Exempt Supervisor', isSupervisor: true, isExemptFromHoursRequirement: true });
+    await makeEmployee({ name: 'Exempt Supervisor', role: 'supervisor', isExemptFromHoursRequirement: true });
     await makeEmployee({ name: 'Regular Lifeguard' });
 
     const response = await request(app).get('/api/compliance/status').set('Cookie', authCookie());
@@ -42,7 +42,7 @@ describe('Hours-exempt supervisors are excluded from compliance tracking', () =>
   });
 
   it('an exempt employee with 0 hours never appears in the zero-hours alert', async () => {
-    await makeEmployee({ name: 'Exempt With Zero Hours', isSupervisor: true, isExemptFromHoursRequirement: true });
+    await makeEmployee({ name: 'Exempt With Zero Hours', role: 'supervisor', isExemptFromHoursRequirement: true });
 
     const response = await request(app).get('/api/compliance/status').set('Cookie', authCookie());
 

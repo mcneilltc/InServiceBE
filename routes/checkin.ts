@@ -5,6 +5,7 @@ const { db } = require('../config/firebase');
 const { requireRole } = require('../middleware/requireRole');
 const { clampSitesToScope } = require('../services/authService');
 const moment = require('moment');
+import { rolesAtLeast } from '../utils/roles';
 import { selfCheckin } from '../controllers/checkinController';
 import { uploadSignature } from '../services/signatureStorage';
 
@@ -157,7 +158,8 @@ router.post('/self', (req, res, next) => {
   return (selfCheckin as any)(req, res, next);
 });
 
-// Get all check-ins — supervisor only (manager dashboard)
+// Get recent check-ins — supervisor only (manager dashboard "Recent Check-Ins"
+// panel).
 //
 // Scoping is by the checked-in employee's *home* location, not the check-in's
 // own location — a supervisor of ERRC should see all their ERRC-homebased
@@ -166,15 +168,19 @@ router.post('/self', (req, res, next) => {
 // narrows those results down to a specific training location; `homeSite`
 // (only meaningful for an all-site supervisor, or one scoped to several
 // sites) narrows the roster itself to one home site.
-router.get('/', requireRole(['supervisor']), async (req: any, res) => {
+//
+// This is a recent-activity monitoring view, not the historical audit log —
+// full history with real date filters already exists via the Reports page's
+// checkins export. `checkins` grows one row per employee per session forever,
+// so without a bound this endpoint used to read the entire collection (plus
+// the entire employees collection, just to build the home-location map) on
+// every call — the dominant driver of Firestore read volume in the app.
+// Scoping to a rolling window turns that into a fixed-size read.
+const RECENT_CHECKINS_WINDOW_DAYS = 30;
+
+router.get('/', requireRole(rolesAtLeast('supervisor')), async (req: any, res) => {
   try {
     const { location, homeSite } = req.query;
-
-    const employeesSnapshot = await db.collection('employees').get();
-    const homeLocationById: Record<string, string> = {};
-    employeesSnapshot.forEach((doc: any) => {
-      homeLocationById[doc.id] = doc.data().homeLocation || '';
-    });
 
     const clientRequestedHomeSites: string[] | null = homeSite
       ? String(homeSite).split(',').map((s) => s.trim()).filter(Boolean)
@@ -185,17 +191,30 @@ router.get('/', requireRole(['supervisor']), async (req: any, res) => {
       ? String(location).split(',').map((s) => s.trim()).filter(Boolean)
       : null;
 
-    const checkinsSnapshot = await db.collection('checkins').get();
+    const cutoff = moment().subtract(RECENT_CHECKINS_WINDOW_DAYS, 'days').toISOString();
+    const checkinsSnapshot = await db.collection('checkins').where('checkinTime', '>=', cutoff).get();
     let checkins: any[] = [];
     checkinsSnapshot.forEach((doc: any) => {
       checkins.push({ id: doc.id, ...doc.data() });
     });
 
-    if (requestedHomeSites) {
-      checkins = checkins.filter((c) => requestedHomeSites.includes(homeLocationById[c.employeeId]));
-    }
     if (requestedLocations) {
       checkins = checkins.filter((c) => requestedLocations.includes(c.location));
+    }
+
+    if (requestedHomeSites) {
+      // Only the employees who actually show up in this (already windowed)
+      // result set need a home-location lookup — a batched get by ID instead
+      // of a full roster scan.
+      const employeeIds = Array.from(new Set(checkins.map((c) => c.employeeId).filter(Boolean))) as string[];
+      const homeLocationById: Record<string, string> = {};
+      if (employeeIds.length > 0) {
+        const employeeDocs = await db.getAll(...employeeIds.map((id) => db.collection('employees').doc(id)));
+        employeeDocs.forEach((doc: any, i: number) => {
+          if (doc.exists) homeLocationById[employeeIds[i]] = doc.data().homeLocation || '';
+        });
+      }
+      checkins = checkins.filter((c) => requestedHomeSites.includes(homeLocationById[c.employeeId]));
     }
 
     // Sort by check-in time (most recent first)

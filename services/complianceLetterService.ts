@@ -1,33 +1,26 @@
 import fs from 'fs';
 import path from 'path';
 import moment from 'moment';
-import JSZip from 'jszip';
+import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import { db } from '../config/firebase';
 import { getEmployeeHoursForMonth } from '../controllers/complianceController';
 import { parseLocalDate } from '../utils/dateParsing';
+import { wrapText } from '../utils/pdfText';
 
 const MONTHLY_THRESHOLD = 4;
 const MIN_SESSIONS = 4;
 const MAX_SESSIONS = 10;
-const TEMPLATE_PATH = path.join(__dirname, '..', 'templates', 'complianceLetterTemplate.docx');
 
-// The one repeatable bullet paragraph left in the template (see
-// templates/complianceLetterTemplate.docx) — duplicated once per upcoming
-// session below. Must match the template's word/document.xml exactly; if
-// the template is ever re-exported from Word, re-locate this string.
-const SESSION_ITEM_TEMPLATE =
-  '<w:p><w:pPr><w:pStyle w:val="ListParagraph"/><w:numPr><w:ilvl w:val="0"/><w:numId w:val="14"/></w:numPr>' +
-  '<w:rPr><w:rFonts w:eastAsiaTheme="minorEastAsia"/><w:noProof/></w:rPr></w:pPr>' +
-  '<w:r><w:rPr><w:rFonts w:eastAsiaTheme="minorEastAsia"/><w:noProof/></w:rPr><w:t>{{SESSION_ITEM}}</w:t></w:r></w:p>';
+// The org's seal, kept from the original Word letterhead — everything else
+// in that template (the "Park and Recreation Department" word-art logo) was
+// a legacy WMF pdf-lib can't embed, so it's reproduced as styled text below
+// instead of trying to convert that asset.
+const SEAL_PATH = path.join(__dirname, '..', 'templates', 'assets', 'county-seal.png');
 
-function escapeXml(value: string): string {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&apos;');
-}
+const PAGE_WIDTH = 612;
+const PAGE_HEIGHT = 792;
+const MARGIN = 54;
+const CONTENT_WIDTH = PAGE_WIDTH - MARGIN * 2;
 
 interface UpcomingSession {
   date: string;
@@ -82,12 +75,10 @@ export interface ComplianceLetter {
   employeeEmail: string;
 }
 
-// Fills in the county's compliance-letter template (see
-// templates/complianceLetterTemplate.docx) with this employee's current
-// hours-missing figure and the next upcoming inservice opportunities
-// company-wide. The template's letterhead/formatting is preserved exactly —
-// only the {{TOKEN}} text nodes and the repeatable session bullet are
-// touched, never rebuilt from scratch.
+// Builds the county's compliance letter as a PDF, drawn directly with
+// pdf-lib (no Word template/OOXML involved) — content and wording match the
+// original template exactly, just rendered natively instead of filling in
+// {{TOKEN}} placeholders in a .docx.
 export async function generateComplianceLetter(employeeId: string): Promise<ComplianceLetter> {
   const employeeDoc = await db.collection('employees').doc(employeeId).get();
   if (!employeeDoc.exists) {
@@ -118,38 +109,91 @@ export async function generateComplianceLetter(employeeId: string): Promise<Comp
     : 'Our records show you have not yet completed the required inservice hours for this month.';
 
   const firstName = employee.firstName || (employee.name || '').split(' ')[0] || 'there';
+  const todayDate = monthMoment.format('MMMM D, YYYY');
+  const endOfMonthDate = monthMoment.clone().endOf('month').format('MMMM D, YYYY');
+  const nextMonthNote = `Beginning ${monthMoment.clone().add(1, 'month').format('MMMM')}, the standard 4-hour monthly inservice requirement resumes. At least 2 hours must be completed by the 15th, and the full 4 hours by the end of the month.`;
 
-  const tokens: Record<string, string> = {
-    '{{FIRST_NAME}}': firstName,
-    '{{TODAY_DATE}}': monthMoment.format('MMMM D, YYYY'),
-    '{{HOURS_MISSING}}': hoursMissing.toFixed(1),
-    '{{END_OF_MONTH_DATE}}': monthMoment.clone().endOf('month').format('MMMM D, YYYY'),
-    '{{CONTACT_NOTE}}': contactNote,
-    '{{NEXT_MONTH_NOTE}}': `Beginning ${monthMoment.clone().add(1, 'month').format('MMMM')}, the standard 4-hour monthly inservice requirement resumes. At least 2 hours must be completed by the 15th, and the full 4 hours by the end of the month.`,
+  const pdfDoc = await PDFDocument.create();
+  const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+  const italicFont = await pdfDoc.embedFont(StandardFonts.HelveticaOblique);
+
+  let page = pdfDoc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
+  let y = PAGE_HEIGHT - MARGIN;
+
+  const ensureSpace = (needed: number) => {
+    if (y - needed < MARGIN) {
+      page = pdfDoc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
+      y = PAGE_HEIGHT - MARGIN;
+    }
   };
 
-  const templateBuffer = fs.readFileSync(TEMPLATE_PATH);
-  const zip = await JSZip.loadAsync(templateBuffer);
-  const documentXmlFile = zip.file('word/document.xml');
-  if (!documentXmlFile) {
-    throw new Error('Compliance letter template is missing word/document.xml');
-  }
-  let xml = await documentXmlFile.async('string');
+  // Paragraph writer: wraps to CONTENT_WIDTH, advances y, paginates as needed.
+  const writeParagraph = (text: string, { bold = false, italic = false, size = 11, gapAfter = 12, indent = 0 } = {}) => {
+    const useFont = bold ? boldFont : italic ? italicFont : font;
+    const lines = wrapText(useFont, text, size, CONTENT_WIDTH - indent);
+    for (const line of lines) {
+      ensureSpace(size + 4);
+      page.drawText(line, { x: MARGIN + indent, y, size, font: useFont, color: rgb(0, 0, 0) });
+      y -= size + 4;
+    }
+    y -= gapAfter;
+  };
 
-  for (const [token, value] of Object.entries(tokens)) {
-    xml = xml.split(token).join(escapeXml(value));
+  // Letterhead
+  if (fs.existsSync(SEAL_PATH)) {
+    try {
+      const sealBytes = fs.readFileSync(SEAL_PATH);
+      const sealImage = await pdfDoc.embedPng(sealBytes);
+      const sealHeight = 50;
+      const sealWidth = (sealImage.width / sealImage.height) * sealHeight;
+      page.drawImage(sealImage, { x: MARGIN, y: y - sealHeight + 10, width: sealWidth, height: sealHeight });
+      page.drawText('MECKLENBURG COUNTY', { x: MARGIN + sealWidth + 12, y: y - 8, size: 14, font: boldFont });
+      page.drawText('Park and Recreation Department', { x: MARGIN + sealWidth + 12, y: y - 24, size: 10, font });
+      y -= sealHeight + 10;
+    } catch {
+      // Seal is decorative — a missing/unreadable asset must never block
+      // sending or downloading the actual compliance content.
+    }
+  } else {
+    page.drawText('MECKLENBURG COUNTY', { x: MARGIN, y, size: 14, font: boldFont });
+    y -= 16;
+    page.drawText('Park and Recreation Department', { x: MARGIN, y, size: 10, font });
+    y -= 30;
   }
 
-  if (!xml.includes(SESSION_ITEM_TEMPLATE)) {
-    throw new Error('Compliance letter template session-item marker not found — the template may have been re-saved from Word');
-  }
-  const sessionParagraphsXml = sessionLines
-    .map((line) => SESSION_ITEM_TEMPLATE.replace('{{SESSION_ITEM}}', escapeXml(line)))
-    .join('');
-  xml = xml.replace(SESSION_ITEM_TEMPLATE, sessionParagraphsXml);
+  writeParagraph('MEMORANDUM', { bold: true, size: 13, gapAfter: 16 });
+  writeParagraph(`Good Morning ${firstName},`, { gapAfter: 12 });
+  writeParagraph(
+    'The Park and Recreation Department has tried contacting you several times as it pertains to your completion of the required in services for your position as a Lifeguard with Mecklenburg County.'
+  );
+  writeParagraph(`As of ${todayDate} you are behind ${hoursMissing.toFixed(1)} Inservice hours.`, { bold: true });
+  writeParagraph(contactNote);
+  writeParagraph(
+    'Mecklenburg County Lifeguards per StarGuardELITE certification policy, procedures, and standards, are required to complete and maintain a minimum of 4 hours of in-service training per month, in order to maintain a current and valid lifeguard certification. Lifeguards who do not complete their 4 hours of monthly in-service, are ineligible be on stand as a lifeguard until the in-service hours have been completed.'
+  );
+  writeParagraph(
+    `In order to remain compliant with policy, you will need to complete ${hoursMissing.toFixed(1)} hours by ${endOfMonthDate}. I have provided you with a list of opportunities to complete the required inservices.`,
+    { bold: true }
+  );
+  writeParagraph('You can complete these inservices at the following locations:', { gapAfter: 6 });
 
-  zip.file('word/document.xml', xml);
-  const buffer = await zip.generateAsync({ type: 'nodebuffer' });
+  for (const line of sessionLines) {
+    ensureSpace(16);
+    page.drawText('•', { x: MARGIN, y, size: 11, font });
+    writeParagraph(line, { indent: 14, gapAfter: 4 });
+  }
+  y -= 6;
+
+  writeParagraph(nextMonthNote, { bold: true });
+  writeParagraph('If you have any questions about this schedule, please contact your supervisor.');
+  writeParagraph(
+    'Failure to complete the required inservices and on an ongoing basis may result in Corrective Action, up to and including dismissal as you are no longer able to eligible to perform your work duties.',
+    { italic: true }
+  );
+  writeParagraph('Thank you for your attention to this matter.');
+
+  const buffer = Buffer.from(await pdfDoc.save());
 
   return {
     buffer,

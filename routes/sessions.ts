@@ -4,13 +4,25 @@ const router = express.Router();
 const { db } = require('../config/firebase');
 const moment = require('moment');
 const { requireRole } = require('../middleware/requireRole');
+import { DeleteObjectCommand } from '@aws-sdk/client-s3';
 import { performCloseOut } from '../services/sessionCloseOutService';
 import { findDuplicateSheetSession } from '../services/sheetDuplicateCheck';
-import { getSignedSheetImageUrl } from '../config/r2';
+import { getSignedSheetImageUrl, r2Client, getBucketName } from '../config/r2';
 import { parseLocalDate } from '../utils/dateParsing';
 import { getMandatoryTopicsForDate } from '../services/mandatoryTopicsService';
+import { rolesAtLeast } from '../utils/roles';
 
-const STAFF = ['supervisor', 'trainer'];
+const STAFF = rolesAtLeast('trainer');
+
+// Live-checked against Firestore, not req.user.role (the session JWT's
+// baked-in claim) — a demotion out of Senior Supervisor must take away this
+// ability on the very next request, not whenever the actor's session
+// happens to refresh (up to 12h later).
+async function hasDeleteSignInSheetsPermission(user: any): Promise<boolean> {
+  if (!user?.employeeId) return false;
+  const doc = await db.collection('employees').doc(user.employeeId).get();
+  return rolesAtLeast('seniorSupervisor').includes(doc.data()?.role);
+}
 
 // Create a new training session (standalone, not tied to specific employee)
 router.post('/', requireRole(STAFF), async (req, res) => {
@@ -240,9 +252,60 @@ router.get('/:sessionId/images', requireRole(STAFF), async (req, res) => {
   }
 });
 
-// Signed, short-lived URL for a session's generated in-service sign-in sheet
-// docx — same posture as GET /:sessionId/images above (the R2 key is never
+// Deletes one uploaded sign-in sheet photo, by its position in
+// sheetImageKeys/sheetImageHashes (the client only ever sees signed URLs at
+// an index — GET /:sessionId/images above never exposes the raw R2 keys, so
+// index is the only handle it has). sheetImageHashes stays index-aligned
+// with sheetImageKeys (see sheetDuplicateCheck.ts), so both arrays are
+// spliced together rather than using arrayRemove — two different photos
+// could in principle share a content hash, and arrayRemove deletes every
+// matching value, not just the one at this index.
+router.delete('/:sessionId/images/:index', requireRole(rolesAtLeast('supervisor')), async (req: any, res) => {
+  try {
+    if (!(await hasDeleteSignInSheetsPermission(req.user))) {
+      return res.status(403).json({ message: 'You do not have permission to delete sign-in sheets. Contact an administrator to request access.' });
+    }
+
+    const { sessionId, index } = req.params;
+    const idx = Number(index);
+    if (!Number.isInteger(idx) || idx < 0) {
+      return res.status(400).json({ message: 'Invalid image index.' });
+    }
+
+    const sessionRef = db.collection('sessions').doc(sessionId);
+    const sessionDoc = await sessionRef.get();
+    if (!sessionDoc.exists) {
+      return res.status(404).json({ message: 'Session not found.' });
+    }
+
+    const keys: string[] = sessionDoc.data()?.sheetImageKeys || [];
+    const hashes: string[] = sessionDoc.data()?.sheetImageHashes || [];
+    if (idx >= keys.length) {
+      return res.status(404).json({ message: 'No photo at that position.' });
+    }
+
+    const [keyToDelete] = keys.splice(idx, 1);
+    hashes.splice(idx, 1);
+
+    await r2Client.send(new DeleteObjectCommand({ Bucket: getBucketName(), Key: keyToDelete }));
+    await sessionRef.update({ sheetImageKeys: keys, sheetImageHashes: hashes });
+
+    res.json({ message: 'Photo deleted' });
+  } catch (error) {
+    console.error('Error deleting session image:', error);
+    res.status(500).json({ error: 'Failed to delete photo' });
+  }
+});
+
+// Signed, short-lived URLs for a session's generated in-service sign-in sheet
+// PDF — same posture as GET /:sessionId/images above (the R2 key is never
 // sent to the client directly; GET / below exposes only a boolean).
+//
+// Two URLs to the same object, differing only in Content-Disposition: `url`
+// has none, so a browser (or an <iframe>) renders it inline for a preview;
+// `downloadUrl` carries `attachment; filename=...`, which forces a save
+// dialog with a clean name. One URL can't do both — disposition is a
+// property of the signed request, not a page-level choice.
 router.get('/:sessionId/inservice-sheet', requireRole(STAFF), async (req, res) => {
   try {
     const { sessionId } = req.params;
@@ -252,15 +315,57 @@ router.get('/:sessionId/inservice-sheet', requireRole(STAFF), async (req, res) =
       return res.status(404).json({ message: 'Session not found.' });
     }
 
+    const sessionData = sessionDoc.data();
+    const key = sessionData?.inserviceSheetKey;
+    if (!key) {
+      return res.status(404).json({ message: 'No in-service sheet has been generated for this session.' });
+    }
+
+    const dateLabel = sessionData?.date ? moment(sessionData.date).format('YYYY-MM-DD') : moment().format('YYYY-MM-DD');
+    const locationLabel = (sessionData?.location || 'Session').replace(/[^a-zA-Z0-9]+/g, '_');
+    const filename = `Inservice_SignIn_Sheet_${locationLabel}_${dateLabel}.pdf`;
+
+    const [url, downloadUrl] = await Promise.all([
+      getSignedSheetImageUrl(key),
+      getSignedSheetImageUrl(key, filename),
+    ]);
+
+    res.json({ url, downloadUrl });
+  } catch (error) {
+    console.error('Error getting in-service sheet:', error);
+    res.status(500).json({ error: 'Failed to get in-service sheet' });
+  }
+});
+
+// Deletes a session's generated in-service sign-in sheet PDF — the R2 object
+// and the key on the session doc. Doesn't touch credited hours (those were
+// already committed at close-out; see sessionCloseOutService.ts) — this only
+// removes the document itself, e.g. to regenerate or correct a bad sheet.
+router.delete('/:sessionId/inservice-sheet', requireRole(rolesAtLeast('supervisor')), async (req: any, res) => {
+  try {
+    if (!(await hasDeleteSignInSheetsPermission(req.user))) {
+      return res.status(403).json({ message: 'You do not have permission to delete sign-in sheets. Contact an administrator to request access.' });
+    }
+
+    const { sessionId } = req.params;
+    const sessionRef = db.collection('sessions').doc(sessionId);
+    const sessionDoc = await sessionRef.get();
+    if (!sessionDoc.exists) {
+      return res.status(404).json({ message: 'Session not found.' });
+    }
+
     const key = sessionDoc.data()?.inserviceSheetKey;
     if (!key) {
       return res.status(404).json({ message: 'No in-service sheet has been generated for this session.' });
     }
 
-    res.json({ url: await getSignedSheetImageUrl(key) });
+    await r2Client.send(new DeleteObjectCommand({ Bucket: getBucketName(), Key: key }));
+    await sessionRef.update({ inserviceSheetKey: null });
+
+    res.json({ message: 'In-service sheet deleted' });
   } catch (error) {
-    console.error('Error getting in-service sheet:', error);
-    res.status(500).json({ error: 'Failed to get in-service sheet' });
+    console.error('Error deleting in-service sheet:', error);
+    res.status(500).json({ error: 'Failed to delete in-service sheet' });
   }
 });
 
@@ -275,6 +380,32 @@ router.put('/:sessionId', requireRole(STAFF), async (req, res) => {
 
     if (!doc.exists) {
       return res.status(404).json({ message: 'Session not found' });
+    }
+    const existingSession = doc.data();
+
+    if (updateData.topics !== undefined) {
+      // Once a session is closed out, its topics are already baked into
+      // credited hours (trainingSessions/trainingSessionsLed) and the
+      // generated sign-in sheet — editing them here wouldn't reach either,
+      // so it'd just make the session doc lie about what was actually
+      // credited.
+      if (existingSession.status === 'completed') {
+        return res.status(400).json({ message: 'This session has already been closed out — its topics can no longer be edited.' });
+      }
+
+      // Same enforcement as session creation (see POST above): whichever
+      // topics are mandatory for this session's week must stay included.
+      const topicsArray = Array.isArray(updateData.topics) ? updateData.topics : [updateData.topics];
+      const { topics: mandatoryTopics } = await getMandatoryTopicsForDate(existingSession.date);
+      const missingMandatory = mandatoryTopics.filter((t: string) => !topicsArray.includes(t));
+      if (missingMandatory.length > 0) {
+        return res.status(400).json({
+          error: {
+            message: `The following mandatory topic(s) for this week must be included: ${missingMandatory.join(', ')}`,
+            missingMandatoryTopics: missingMandatory,
+          }
+        });
+      }
     }
 
     const normalizedUpdateData = { ...updateData };

@@ -1,5 +1,6 @@
 const { db } = require('../config/firebase');
 const { z } = require('zod');
+const { ROLE_HIERARCHY } = require('../utils/roles');
 
 const certificationSchema = z.object({
   type: z.string().min(1, "Certification type is required"),
@@ -30,20 +31,16 @@ const employeeSchema = z.object({
     firstName: z.string().optional(),
     lastName: z.string().optional(),
     teamId: z.string().optional(), // Make optional if it's not strictly required by DB, adjust if needed
-    isSupervisor: z.boolean().optional(),
-    supervisorScope: z.enum(['all', 'locations']).optional(),
-    isTrainer: z.boolean().optional(),
+    // trainer / supervisor / seniorSupervisor / admin, or null for a
+    // roster-only entry with no login capability at all — see utils/roles.ts.
+    // Assigning or changing this is admin-only, enforced live in
+    // createEmployee/updateEmployee below (never trust the JWT claim for
+    // this — it's the single most sensitive action in the app).
+    role: z.enum(ROLE_HIERARCHY).nullable().optional(),
     // Certain supervisors are exempt from the standard 4-hour monthly
     // inservice requirement — when set, they're left out of compliance
     // tracking, alerts, and reminder emails entirely (see complianceController.ts).
     isExemptFromHoursRequirement: z.boolean().optional(),
-    // Gates the Add Hours dialog and the historical-hours step of the Excel
-    // import (both hit POST /api/training-sessions/:employeeId) — see
-    // trainingSessionsController.createSession. Only meaningful for
-    // supervisors; defaults to true so existing supervisors keep today's
-    // behavior unless explicitly revoked.
-    canAddManualHours: z.boolean().optional(),
-    canManageMandatoryTopics: z.boolean().optional(),
     // Link to a When I Work user for shift sync/pickup. Intentionally NOT
     // settable here directly by callers — set only via the WIW link/backfill
     // flow (services/wheniworkService.ts), same as passwordHash below is only
@@ -73,27 +70,21 @@ const updateEmployeeSchema = z.object({
     firstName: z.string().optional(),
     lastName: z.string().optional(),
     teamId: z.string().optional(),
-    isSupervisor: z.boolean().optional(),
-    supervisorScope: z.enum(['all', 'locations']).optional(),
-    isTrainer: z.boolean().optional(),
-    // Certain supervisors are exempt from the standard 4-hour monthly
-    // inservice requirement — when set, they're left out of compliance
-    // tracking, alerts, and reminder emails entirely (see complianceController.ts).
+    role: z.enum(ROLE_HIERARCHY).nullable().optional(),
     isExemptFromHoursRequirement: z.boolean().optional(),
-    canAddManualHours: z.boolean().optional(),
-    canManageMandatoryTopics: z.boolean().optional(),
     wheniworkUserId: z.string().nullable().optional(),
   })
 });
 
-const bulkManualHoursPermissionSchema = z.object({
-  body: z.object({
-    updates: z.array(z.object({
-      employeeId: z.string().min(1),
-      canAddManualHours: z.boolean(),
-    })).min(1, "At least one update is required"),
-  })
-});
+// Live-checked against Firestore, never req.user.role (the session JWT's
+// baked-in claim) — role changes are the single most sensitive action in the
+// app, so a demotion/revocation must take effect on the very next request,
+// not whenever the actor's session happens to refresh (up to 12h later).
+async function isActingUserAdmin(req) {
+  if (!req.user?.employeeId) return false;
+  const doc = await db.collection('employees').doc(req.user.employeeId).get();
+  return doc.data()?.role === 'admin';
+}
 
 // Controllers
 const getAllEmployees = async (req, res, next) => {
@@ -104,11 +95,12 @@ const getAllEmployees = async (req, res, next) => {
       employees.push({ id: doc.id, ...doc.data() });
     });
 
-    // Location-scoped supervisors only see the roster at their own site(s);
-    // 'all sites' supervisors and trainers (who need the full list for
-    // trainee pickers / OCR matching) see everyone.
+    // A plain Supervisor only sees the roster at their own site(s); Senior
+    // Supervisor, Admin, and Trainer (who need the full list for trainee
+    // pickers / OCR matching) see everyone — site scope is all-site for
+    // every tier above Supervisor.
     const user = req.user;
-    if (user && user.role === 'supervisor' && user.supervisorScope === 'locations') {
+    if (user && user.role === 'supervisor') {
       const allowedLocations = new Set(user.supervisorLocations || []);
       employees = employees.filter(emp => (emp.locations || []).some(loc => allowedLocations.has(loc)));
     }
@@ -123,11 +115,11 @@ const getEmployeeById = async (req, res, next) => {
   try {
     const { id } = req.params;
     const doc = await db.collection('employees').doc(id).get();
-    
+
     if (!doc.exists) {
       return res.status(404).json({ message: 'Employee not found' });
     }
-    
+
     res.json({ id: doc.id, ...doc.data() });
   } catch (error) {
     next(error);
@@ -140,9 +132,12 @@ const createEmployee = async (req, res, next) => {
       name, email, alternateEmails, position, phone, hireDate, locations, homeLocation, certifications, isActive,
       depth, certificationExpiration, hasSlideCert, hasSwimCert,
       isEliteSupervisor, badgeNumber, firstName, lastName, teamId,
-      isSupervisor, supervisorScope, isTrainer, wheniworkUserId, isExemptFromHoursRequirement,
-      canAddManualHours, canManageMandatoryTopics
+      role, wheniworkUserId, isExemptFromHoursRequirement,
     } = req.body;
+
+    if (role !== undefined && !(await isActingUserAdmin(req))) {
+      return res.status(403).json({ message: 'Only an Admin can assign a role.' });
+    }
 
     // Prevent duplicate records — check by badge number first (the more
     // reliable real-world unique identifier), falling back to email. This
@@ -193,18 +188,8 @@ const createEmployee = async (req, res, next) => {
       firstName: firstName || null,
       lastName: lastName || null,
       teamId: teamId || null,
-      isSupervisor: !!isSupervisor,
-      supervisorScope: isSupervisor ? (supervisorScope || 'locations') : null,
-      isTrainer: !!isTrainer,
+      role: role || null,
       isExemptFromHoursRequirement: !!isExemptFromHoursRequirement,
-      // Only meaningful for supervisors; defaults to true (existing/newly
-      // created supervisors keep the ability unless explicitly unchecked).
-      canAddManualHours: isSupervisor ? (canAddManualHours !== false) : null,
-      // Opt-in (unlike canAddManualHours above) — this is meant to stay
-      // restricted to whichever one supervisor is designated to manage the
-      // org-wide mandatory-topics schedule, so new/existing supervisors do
-      // NOT get it automatically; must be explicitly granted.
-      canManageMandatoryTopics: isSupervisor ? (canManageMandatoryTopics === true) : null,
       wheniworkUserId: wheniworkUserId || null,
       // Employee login (shift pickup) credentials — only ever set via
       // routes/employeeAuth.ts (invite/set-password flow), never here.
@@ -233,9 +218,12 @@ const updateEmployee = async (req, res, next) => {
       name, email, alternateEmails, position, phone, hireDate, locations, homeLocation, certifications, isActive,
       depth, certificationExpiration, hasSlideCert, hasSwimCert,
       isEliteSupervisor, badgeNumber, firstName, lastName, teamId,
-      isSupervisor, supervisorScope, isTrainer, wheniworkUserId, isExemptFromHoursRequirement,
-      canAddManualHours, canManageMandatoryTopics
+      role, wheniworkUserId, isExemptFromHoursRequirement,
     } = req.body;
+
+    if (role !== undefined && !(await isActingUserAdmin(req))) {
+      return res.status(403).json({ message: 'Only an Admin can change a role.' });
+    }
 
     const docRef = db.collection('employees').doc(id);
     const doc = await docRef.get();
@@ -267,16 +255,8 @@ const updateEmployee = async (req, res, next) => {
     if (firstName !== undefined) updateData.firstName = firstName;
     if (lastName !== undefined) updateData.lastName = lastName;
     if (teamId !== undefined) updateData.teamId = teamId;
-    if (isSupervisor !== undefined) {
-      updateData.isSupervisor = isSupervisor;
-      updateData.supervisorScope = isSupervisor ? (supervisorScope || 'locations') : null;
-    } else if (supervisorScope !== undefined) {
-      updateData.supervisorScope = supervisorScope;
-    }
-    if (isTrainer !== undefined) updateData.isTrainer = isTrainer;
+    if (role !== undefined) updateData.role = role;
     if (isExemptFromHoursRequirement !== undefined) updateData.isExemptFromHoursRequirement = isExemptFromHoursRequirement;
-    if (canAddManualHours !== undefined) updateData.canAddManualHours = canAddManualHours;
-    if (canManageMandatoryTopics !== undefined) updateData.canManageMandatoryTopics = canManageMandatoryTopics;
     if (wheniworkUserId !== undefined) updateData.wheniworkUserId = wheniworkUserId;
     updateData.updatedAt = new Date().toISOString();
 
@@ -286,50 +266,6 @@ const updateEmployee = async (req, res, next) => {
       id,
       employee: { id, ...doc.data(), ...updateData }
     });
-  } catch (error) {
-    next(error);
-  }
-};
-
-// Bulk toggle of canAddManualHours across many supervisors at once (the
-// Manage Employees "Manual Hours Permissions" dialog) — one round trip and
-// one Firestore batch instead of N individual PUTs. Validates every target
-// up front so this either fully applies or fully rejects, rather than
-// silently skipping some rows an admin wouldn't necessarily notice.
-const bulkUpdateManualHoursPermission = async (req, res, next) => {
-  try {
-    const { updates } = req.body;
-
-    const docs = await Promise.all(
-      updates.map((u) => db.collection('employees').doc(u.employeeId).get())
-    );
-
-    const notFound = [];
-    const notSupervisors = [];
-    docs.forEach((doc, i) => {
-      if (!doc.exists) notFound.push(updates[i].employeeId);
-      else if (!doc.data().isSupervisor) notSupervisors.push(updates[i].employeeId);
-    });
-
-    if (notFound.length > 0 || notSupervisors.length > 0) {
-      return res.status(400).json({
-        message: 'Some employees could not be updated — this permission only applies to supervisors.',
-        notFound,
-        notSupervisors,
-      });
-    }
-
-    const batch = db.batch();
-    const updatedAt = new Date().toISOString();
-    updates.forEach((u) => {
-      batch.update(db.collection('employees').doc(u.employeeId), {
-        canAddManualHours: u.canAddManualHours,
-        updatedAt,
-      });
-    });
-    await batch.commit();
-
-    res.json({ message: `Updated ${updates.length} supervisor(s)`, updatedCount: updates.length });
   } catch (error) {
     next(error);
   }
@@ -360,11 +296,9 @@ const deleteEmployee = async (req, res, next) => {
 module.exports = {
   employeeSchema,
   updateEmployeeSchema,
-  bulkManualHoursPermissionSchema,
   getAllEmployees,
   getEmployeeById,
   createEmployee,
   updateEmployee,
   deleteEmployee,
-  bulkUpdateManualHoursPermission
 };

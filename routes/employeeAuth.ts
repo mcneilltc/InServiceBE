@@ -5,6 +5,7 @@ const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
 const { db } = require('../config/firebase');
 const { COOKIE_OPTIONS, SESSION_MAX_AGE_SECONDS, requireRole } = require('../middleware/requireRole');
+import { rolesAtLeast } from '../utils/roles';
 const {
   findEmployeeByEmail,
   verifyEmployeePassword,
@@ -64,7 +65,7 @@ router.post('/login', async (req: any, res: any) => {
 });
 
 // POST /api/auth/employee/invite — supervisor-triggered. body: { employeeId }
-router.post('/invite', requireRole(['supervisor']), async (req: any, res: any) => {
+router.post('/invite', requireRole(rolesAtLeast('supervisor')), async (req: any, res: any) => {
   try {
     const { employeeId } = req.body || {};
     if (!employeeId) {

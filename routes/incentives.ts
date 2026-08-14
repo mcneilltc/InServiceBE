@@ -1,6 +1,7 @@
 import express from 'express';
 import validate from '../middleware/validate';
 const { requireRole } = require('../middleware/requireRole');
+import { rolesAtLeast } from '../utils/roles';
 import {
   tierSchema,
   updateTierSchema,
@@ -12,8 +13,8 @@ import {
 } from '../controllers/incentiveController';
 
 const router = express.Router();
-const STAFF = ['supervisor', 'trainer'];
-const SUPERVISOR = ['supervisor'];
+const STAFF = rolesAtLeast('trainer');
+const SUPERVISOR = rolesAtLeast('supervisor');
 
 // Reads — supervisors and trainers both can see the current reward tiers.
 router.get('/tiers', requireRole(STAFF), getAllTiers);
