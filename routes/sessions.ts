@@ -203,6 +203,33 @@ router.post('/from-sheet', requireRole(STAFF), async (req, res) => {
   }
 });
 
+// Batched version of GET /:sessionId/images, below — the Sign-In Sheets page
+// needs every session's photo URLs at once for a whole expanded month, and
+// N sessions used to mean N separate round trips (each its own Firestore
+// read). One batched Firestore read (db.getAll) + one response instead.
+// Declared before GET /:sessionId so Express doesn't match "images-batch"
+// as a :sessionId value.
+router.get('/images-batch', requireRole(STAFF), async (req, res) => {
+  try {
+    const sessionIds = String(req.query.sessionIds || '').split(',').map((s) => s.trim()).filter(Boolean);
+    if (sessionIds.length === 0) {
+      return res.json({});
+    }
+
+    const docs = await db.getAll(...sessionIds.map((id) => db.collection('sessions').doc(id)));
+    const result: Record<string, string[]> = {};
+    await Promise.all(docs.map(async (doc: any, i: number) => {
+      const keys: string[] = doc.exists ? (doc.data()?.sheetImageKeys || []) : [];
+      result[sessionIds[i]] = await Promise.all(keys.map((key) => getSignedSheetImageUrl(key)));
+    }));
+
+    res.json(result);
+  } catch (error) {
+    console.error('Error getting batch session images:', error);
+    res.status(500).json({ error: 'Failed to get session images' });
+  }
+});
+
 // Get a specific session by ID — stays public: the QR check-in page
 // (src/pages/checkin/[sessionId].js) fetches this before the visitor has
 // identified themselves at all. Only exposes session metadata (topic/date/
@@ -287,7 +314,16 @@ router.delete('/:sessionId/images/:index', requireRole(rolesAtLeast('supervisor'
     const [keyToDelete] = keys.splice(idx, 1);
     hashes.splice(idx, 1);
 
-    await r2Client.send(new DeleteObjectCommand({ Bucket: getBucketName(), Key: keyToDelete }));
+    // The record (this session's reference to the photo) and the file (the
+    // R2 object) are cleaned up independently — a storage-side failure (the
+    // object already gone, a transient R2 error) must not leave the session
+    // stuck showing a photo that can never be removed. Best-effort on the
+    // file, guaranteed on the record.
+    try {
+      await r2Client.send(new DeleteObjectCommand({ Bucket: getBucketName(), Key: keyToDelete }));
+    } catch (error) {
+      console.warn(`Failed to delete R2 object for session ${sessionId} photo (clearing the record anyway):`, (error as Error).message);
+    }
     await sessionRef.update({ sheetImageKeys: keys, sheetImageHashes: hashes });
 
     res.json({ message: 'Photo deleted' });
@@ -298,14 +334,19 @@ router.delete('/:sessionId/images/:index', requireRole(rolesAtLeast('supervisor'
 });
 
 // Signed, short-lived URLs for a session's generated in-service sign-in sheet
-// PDF — same posture as GET /:sessionId/images above (the R2 key is never
-// sent to the client directly; GET / below exposes only a boolean).
+// — same posture as GET /:sessionId/images above (the R2 key is never sent
+// to the client directly; GET / below exposes only a boolean).
 //
 // Two URLs to the same object, differing only in Content-Disposition: `url`
-// has none, so a browser (or an <iframe>) renders it inline for a preview;
+// is `inline`, so a browser (or an <iframe>) renders it for a preview;
 // `downloadUrl` carries `attachment; filename=...`, which forces a save
 // dialog with a clean name. One URL can't do both — disposition is a
 // property of the signed request, not a page-level choice.
+//
+// Sessions closed out before the PDF rewrite (see inserviceSheetService.ts)
+// still have a `.docx` key in R2 — Word documents have no in-browser inline
+// viewer, so `isLegacyFormat` tells the client to skip the iframe preview
+// (which would just render blank) and go straight to download.
 router.get('/:sessionId/inservice-sheet', requireRole(STAFF), async (req, res) => {
   try {
     const { sessionId } = req.params;
@@ -321,16 +362,17 @@ router.get('/:sessionId/inservice-sheet', requireRole(STAFF), async (req, res) =
       return res.status(404).json({ message: 'No in-service sheet has been generated for this session.' });
     }
 
+    const isLegacyFormat = key.endsWith('.docx');
     const dateLabel = sessionData?.date ? moment(sessionData.date).format('YYYY-MM-DD') : moment().format('YYYY-MM-DD');
     const locationLabel = (sessionData?.location || 'Session').replace(/[^a-zA-Z0-9]+/g, '_');
-    const filename = `Inservice_SignIn_Sheet_${locationLabel}_${dateLabel}.pdf`;
+    const filename = `Inservice_SignIn_Sheet_${locationLabel}_${dateLabel}.${isLegacyFormat ? 'docx' : 'pdf'}`;
 
     const [url, downloadUrl] = await Promise.all([
       getSignedSheetImageUrl(key),
       getSignedSheetImageUrl(key, filename),
     ]);
 
-    res.json({ url, downloadUrl });
+    res.json({ url, downloadUrl, isLegacyFormat });
   } catch (error) {
     console.error('Error getting in-service sheet:', error);
     res.status(500).json({ error: 'Failed to get in-service sheet' });
@@ -359,7 +401,16 @@ router.delete('/:sessionId/inservice-sheet', requireRole(rolesAtLeast('superviso
       return res.status(404).json({ message: 'No in-service sheet has been generated for this session.' });
     }
 
-    await r2Client.send(new DeleteObjectCommand({ Bucket: getBucketName(), Key: key }));
+    // The record (this session's reference to its sheet) and the file (the
+    // R2 object) are cleaned up independently — a storage-side failure (the
+    // object already gone, a transient R2 error) must not leave the session
+    // stuck showing a sheet that can never be removed. Best-effort on the
+    // file, guaranteed on the record.
+    try {
+      await r2Client.send(new DeleteObjectCommand({ Bucket: getBucketName(), Key: key }));
+    } catch (error) {
+      console.warn(`Failed to delete R2 object for session ${sessionId} inservice sheet (clearing the record anyway):`, (error as Error).message);
+    }
     await sessionRef.update({ inserviceSheetKey: null });
 
     res.json({ message: 'In-service sheet deleted' });
