@@ -86,3 +86,90 @@ describe('POST /api/sessions — mandatory topics enforcement', () => {
     createdSessionIds.push(response.body.sessionId);
   });
 });
+
+describe('PUT /api/sessions/:sessionId — mandatory topics enforcement on edit', () => {
+  const createdSessionIds: string[] = [];
+  const createdMonthDocIds: string[] = [];
+
+  afterEach(async () => {
+    for (const id of createdSessionIds.splice(0)) await db.collection('sessions').doc(id).delete();
+    for (const id of createdMonthDocIds.splice(0)) await db.collection('mandatoryTopics').doc(id).delete();
+  });
+
+  async function makeSession(overrides: Record<string, any> = {}) {
+    const ref = await db.collection('sessions').add({
+      date: '2026-10-10', // day 10 -> week 2
+      location: 'MCAC',
+      status: 'scheduled',
+      topics: ['CPR', 'Something Else'],
+      trainer: ['trainer-1'],
+      trainees: [],
+      ...overrides,
+    });
+    createdSessionIds.push(ref.id);
+    return ref.id;
+  }
+
+  it('rejects removing a mandatory topic for that session\'s week', async () => {
+    createdMonthDocIds.push('2026-10');
+    await db.collection('mandatoryTopics').doc('2026-10').set({
+      weeks: { '1': [], '2': ['CPR'], '3': [], '4': [], '5': [] },
+    });
+    const sessionId = await makeSession();
+
+    const response = await request(app)
+      .put(`/api/sessions/${sessionId}`)
+      .set('Cookie', authCookie())
+      .send({ topics: ['Something Else'] });
+
+    expect(response.status).toBe(400);
+    expect(response.body.error.missingMandatoryTopics).toEqual(['CPR']);
+
+    const saved = await db.collection('sessions').doc(sessionId).get();
+    expect(saved.data()?.topics).toEqual(['CPR', 'Something Else']);
+  });
+
+  it('allows editing non-mandatory topics as long as the mandatory one stays included', async () => {
+    createdMonthDocIds.push('2026-10');
+    await db.collection('mandatoryTopics').doc('2026-10').set({
+      weeks: { '1': [], '2': ['CPR'], '3': [], '4': [], '5': [] },
+    });
+    const sessionId = await makeSession();
+
+    const response = await request(app)
+      .put(`/api/sessions/${sessionId}`)
+      .set('Cookie', authCookie())
+      .send({ topics: ['CPR', 'A New Topic'] });
+
+    expect(response.status).toBe(200);
+    const saved = await db.collection('sessions').doc(sessionId).get();
+    expect(saved.data()?.topics).toEqual(['CPR', 'A New Topic']);
+  });
+
+  it('rejects editing topics on a session that has already been closed out', async () => {
+    const sessionId = await makeSession({ status: 'completed' });
+
+    const response = await request(app)
+      .put(`/api/sessions/${sessionId}`)
+      .set('Cookie', authCookie())
+      .send({ topics: ['Something Else'] });
+
+    expect(response.status).toBe(400);
+    expect(response.body.message).toMatch(/already been closed out/i);
+  });
+
+  it('leaves topics enforcement out of updates that don\'t touch topics', async () => {
+    createdMonthDocIds.push('2026-10');
+    await db.collection('mandatoryTopics').doc('2026-10').set({
+      weeks: { '1': [], '2': ['CPR'], '3': [], '4': [], '5': [] },
+    });
+    const sessionId = await makeSession();
+
+    const response = await request(app)
+      .put(`/api/sessions/${sessionId}`)
+      .set('Cookie', authCookie())
+      .send({ trainees: ['employee-1'] });
+
+    expect(response.status).toBe(200);
+  });
+});

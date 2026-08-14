@@ -44,6 +44,7 @@ const employeeSchema = z.object({
     // behavior unless explicitly revoked.
     canAddManualHours: z.boolean().optional(),
     canManageMandatoryTopics: z.boolean().optional(),
+    canDeleteSignInSheets: z.boolean().optional(),
     // Link to a When I Work user for shift sync/pickup. Intentionally NOT
     // settable here directly by callers — set only via the WIW link/backfill
     // flow (services/wheniworkService.ts), same as passwordHash below is only
@@ -82,6 +83,7 @@ const updateEmployeeSchema = z.object({
     isExemptFromHoursRequirement: z.boolean().optional(),
     canAddManualHours: z.boolean().optional(),
     canManageMandatoryTopics: z.boolean().optional(),
+    canDeleteSignInSheets: z.boolean().optional(),
     wheniworkUserId: z.string().nullable().optional(),
   })
 });
@@ -141,7 +143,7 @@ const createEmployee = async (req, res, next) => {
       depth, certificationExpiration, hasSlideCert, hasSwimCert,
       isEliteSupervisor, badgeNumber, firstName, lastName, teamId,
       isSupervisor, supervisorScope, isTrainer, wheniworkUserId, isExemptFromHoursRequirement,
-      canAddManualHours, canManageMandatoryTopics
+      canAddManualHours, canManageMandatoryTopics, canDeleteSignInSheets
     } = req.body;
 
     // Prevent duplicate records — check by badge number first (the more
@@ -205,6 +207,8 @@ const createEmployee = async (req, res, next) => {
       // org-wide mandatory-topics schedule, so new/existing supervisors do
       // NOT get it automatically; must be explicitly granted.
       canManageMandatoryTopics: isSupervisor ? (canManageMandatoryTopics === true) : null,
+      // Opt-in, same reasoning as canManageMandatoryTopics above.
+      canDeleteSignInSheets: isSupervisor ? (canDeleteSignInSheets === true) : null,
       wheniworkUserId: wheniworkUserId || null,
       // Employee login (shift pickup) credentials — only ever set via
       // routes/employeeAuth.ts (invite/set-password flow), never here.
@@ -234,7 +238,7 @@ const updateEmployee = async (req, res, next) => {
       depth, certificationExpiration, hasSlideCert, hasSwimCert,
       isEliteSupervisor, badgeNumber, firstName, lastName, teamId,
       isSupervisor, supervisorScope, isTrainer, wheniworkUserId, isExemptFromHoursRequirement,
-      canAddManualHours, canManageMandatoryTopics
+      canAddManualHours, canManageMandatoryTopics, canDeleteSignInSheets
     } = req.body;
 
     const docRef = db.collection('employees').doc(id);
@@ -277,6 +281,7 @@ const updateEmployee = async (req, res, next) => {
     if (isExemptFromHoursRequirement !== undefined) updateData.isExemptFromHoursRequirement = isExemptFromHoursRequirement;
     if (canAddManualHours !== undefined) updateData.canAddManualHours = canAddManualHours;
     if (canManageMandatoryTopics !== undefined) updateData.canManageMandatoryTopics = canManageMandatoryTopics;
+    if (canDeleteSignInSheets !== undefined) updateData.canDeleteSignInSheets = canDeleteSignInSheets;
     if (wheniworkUserId !== undefined) updateData.wheniworkUserId = wheniworkUserId;
     updateData.updatedAt = new Date().toISOString();
 
