@@ -43,6 +43,7 @@ const employeeSchema = z.object({
     // supervisors; defaults to true so existing supervisors keep today's
     // behavior unless explicitly revoked.
     canAddManualHours: z.boolean().optional(),
+    canManageMandatoryTopics: z.boolean().optional(),
     // Link to a When I Work user for shift sync/pickup. Intentionally NOT
     // settable here directly by callers — set only via the WIW link/backfill
     // flow (services/wheniworkService.ts), same as passwordHash below is only
@@ -80,7 +81,17 @@ const updateEmployeeSchema = z.object({
     // tracking, alerts, and reminder emails entirely (see complianceController.ts).
     isExemptFromHoursRequirement: z.boolean().optional(),
     canAddManualHours: z.boolean().optional(),
+    canManageMandatoryTopics: z.boolean().optional(),
     wheniworkUserId: z.string().nullable().optional(),
+  })
+});
+
+const bulkManualHoursPermissionSchema = z.object({
+  body: z.object({
+    updates: z.array(z.object({
+      employeeId: z.string().min(1),
+      canAddManualHours: z.boolean(),
+    })).min(1, "At least one update is required"),
   })
 });
 
@@ -130,7 +141,7 @@ const createEmployee = async (req, res, next) => {
       depth, certificationExpiration, hasSlideCert, hasSwimCert,
       isEliteSupervisor, badgeNumber, firstName, lastName, teamId,
       isSupervisor, supervisorScope, isTrainer, wheniworkUserId, isExemptFromHoursRequirement,
-      canAddManualHours
+      canAddManualHours, canManageMandatoryTopics
     } = req.body;
 
     // Prevent duplicate records — check by badge number first (the more
@@ -189,6 +200,11 @@ const createEmployee = async (req, res, next) => {
       // Only meaningful for supervisors; defaults to true (existing/newly
       // created supervisors keep the ability unless explicitly unchecked).
       canAddManualHours: isSupervisor ? (canAddManualHours !== false) : null,
+      // Opt-in (unlike canAddManualHours above) — this is meant to stay
+      // restricted to whichever one supervisor is designated to manage the
+      // org-wide mandatory-topics schedule, so new/existing supervisors do
+      // NOT get it automatically; must be explicitly granted.
+      canManageMandatoryTopics: isSupervisor ? (canManageMandatoryTopics === true) : null,
       wheniworkUserId: wheniworkUserId || null,
       // Employee login (shift pickup) credentials — only ever set via
       // routes/employeeAuth.ts (invite/set-password flow), never here.
@@ -218,7 +234,7 @@ const updateEmployee = async (req, res, next) => {
       depth, certificationExpiration, hasSlideCert, hasSwimCert,
       isEliteSupervisor, badgeNumber, firstName, lastName, teamId,
       isSupervisor, supervisorScope, isTrainer, wheniworkUserId, isExemptFromHoursRequirement,
-      canAddManualHours
+      canAddManualHours, canManageMandatoryTopics
     } = req.body;
 
     const docRef = db.collection('employees').doc(id);
@@ -260,6 +276,7 @@ const updateEmployee = async (req, res, next) => {
     if (isTrainer !== undefined) updateData.isTrainer = isTrainer;
     if (isExemptFromHoursRequirement !== undefined) updateData.isExemptFromHoursRequirement = isExemptFromHoursRequirement;
     if (canAddManualHours !== undefined) updateData.canAddManualHours = canAddManualHours;
+    if (canManageMandatoryTopics !== undefined) updateData.canManageMandatoryTopics = canManageMandatoryTopics;
     if (wheniworkUserId !== undefined) updateData.wheniworkUserId = wheniworkUserId;
     updateData.updatedAt = new Date().toISOString();
 
@@ -269,6 +286,50 @@ const updateEmployee = async (req, res, next) => {
       id,
       employee: { id, ...doc.data(), ...updateData }
     });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Bulk toggle of canAddManualHours across many supervisors at once (the
+// Manage Employees "Manual Hours Permissions" dialog) — one round trip and
+// one Firestore batch instead of N individual PUTs. Validates every target
+// up front so this either fully applies or fully rejects, rather than
+// silently skipping some rows an admin wouldn't necessarily notice.
+const bulkUpdateManualHoursPermission = async (req, res, next) => {
+  try {
+    const { updates } = req.body;
+
+    const docs = await Promise.all(
+      updates.map((u) => db.collection('employees').doc(u.employeeId).get())
+    );
+
+    const notFound = [];
+    const notSupervisors = [];
+    docs.forEach((doc, i) => {
+      if (!doc.exists) notFound.push(updates[i].employeeId);
+      else if (!doc.data().isSupervisor) notSupervisors.push(updates[i].employeeId);
+    });
+
+    if (notFound.length > 0 || notSupervisors.length > 0) {
+      return res.status(400).json({
+        message: 'Some employees could not be updated — this permission only applies to supervisors.',
+        notFound,
+        notSupervisors,
+      });
+    }
+
+    const batch = db.batch();
+    const updatedAt = new Date().toISOString();
+    updates.forEach((u) => {
+      batch.update(db.collection('employees').doc(u.employeeId), {
+        canAddManualHours: u.canAddManualHours,
+        updatedAt,
+      });
+    });
+    await batch.commit();
+
+    res.json({ message: `Updated ${updates.length} supervisor(s)`, updatedCount: updates.length });
   } catch (error) {
     next(error);
   }
@@ -299,9 +360,11 @@ const deleteEmployee = async (req, res, next) => {
 module.exports = {
   employeeSchema,
   updateEmployeeSchema,
+  bulkManualHoursPermissionSchema,
   getAllEmployees,
   getEmployeeById,
   createEmployee,
   updateEmployee,
-  deleteEmployee
+  deleteEmployee,
+  bulkUpdateManualHoursPermission
 };

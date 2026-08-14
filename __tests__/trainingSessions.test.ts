@@ -43,8 +43,14 @@ describe('Training Sessions API', () => {
       const mockAdd = jest.fn().mockResolvedValue({ id: 'new-id' });
       const mockDocGet = jest.fn().mockResolvedValue({ exists: true, data: () => ({ name: 'Test Trainer' }) });
       const mockDoc = jest.fn().mockReturnValue({ get: mockDocGet });
+      // No mandatory-topics schedule configured for this test's date —
+      // .doc().get() resolving to a non-existent doc is what
+      // getMandatoryTopicsForDate expects in that case.
+      const mockMandatoryTopicsDocGet = jest.fn().mockResolvedValue({ exists: false });
+      const mockMandatoryTopicsDoc = jest.fn().mockReturnValue({ get: mockMandatoryTopicsDocGet });
       (db.collection as jest.Mock).mockImplementation((coll) => {
         if (coll === 'trainers') return { doc: mockDoc };
+        if (coll === 'mandatoryTopics') return { doc: mockMandatoryTopicsDoc };
         return { add: mockAdd };
       });
 

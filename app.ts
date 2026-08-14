@@ -51,6 +51,7 @@ app.use(express.urlencoded({ extended: true })); // Parse URL-encoded bodies
 import employeeRoutes from './routes/employees';
 import trainingSessionRoutes from './routes/trainingSessions';
 import trainingTopicRoutes from './routes/trainingTopics';
+import mandatoryTopicsRoutes from './routes/mandatoryTopics';
 import dashboardRoutes from './routes/dashboard';
 import checkinRoutes from './routes/checkin';
 import sessionRoutes from './routes/sessions';
@@ -64,6 +65,7 @@ import employeeSelfServiceRoutes from './routes/employeeSelfService';
 import certificationRoutes from './routes/certifications';
 import siteRoutes from './routes/sites';
 import trainingAnalyticsRoutes from './routes/trainingAnalytics';
+import topicTallyRoutes from './routes/topicTally';
 // When I Work integration — commented out of production for now (real WIW
 // credential verification isn't implemented yet; see routes/employeeAuth.ts
 // and services/wheniworkClient.ts for where that work left off). Uncomment
@@ -82,6 +84,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/employees', employeeRoutes);
 app.use('/api/training-sessions', trainingSessionRoutes);
 app.use('/api/training-topics', trainingTopicRoutes);
+app.use('/api/mandatory-topics', mandatoryTopicsRoutes);
 app.use('/api/dashboard', SUPERVISOR, dashboardRoutes);
 app.use('/api/checkin', checkinRoutes);
 app.use('/api/sessions', sessionRoutes);
@@ -93,6 +96,7 @@ app.use('/api/employee', employeeSelfServiceRoutes);
 app.use('/api/certifications', certificationRoutes);
 app.use('/api/sites', siteRoutes);
 app.use('/api/training-analytics', SUPERVISOR, trainingAnalyticsRoutes);
+app.use('/api/topic-tally', SUPERVISOR, topicTallyRoutes);
 // When I Work integration — commented out of production for now (see note
 // by the imports above). Uncomment to re-enable the webhook receiver,
 // employee shift-pickup routes, and employee login/invite routes.

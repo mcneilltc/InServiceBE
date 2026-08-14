@@ -4,6 +4,7 @@ import moment from 'moment';
 import { PutObjectCommand } from '@aws-sdk/client-s3';
 import { r2Client, getBucketName } from '../config/r2';
 import { generateInserviceSheet } from './inserviceSheetService';
+import { findOverlappingInserviceSheetSession } from './sheetDuplicateCheck';
 
 // The scheduled end of a session: date + startTime + length (hours). Used to
 // decide when a reminder or auto-close is due, and as the auto-close's
@@ -49,6 +50,24 @@ export async function performCloseOut(sessionId: string, options: CloseOutOption
   if (sessionData.status === 'completed') {
     const err: any = new Error('This session has already been closed out.');
     err.statusCode = 400;
+    throw err;
+  }
+
+  const trainerIdsForOverlapCheck: string[] = Array.isArray(sessionData.trainer)
+    ? sessionData.trainer
+    : (sessionData.trainer ? [sessionData.trainer] : []);
+  const overlap = await findOverlappingInserviceSheetSession(
+    trainerIdsForOverlapCheck,
+    sessionData.date,
+    sessionData.startTime,
+    typeof sessionData.length === 'number' ? sessionData.length : parseFloat(sessionData.length) || 0,
+    sessionId,
+  );
+  if (overlap) {
+    const err: any = new Error(
+      `Cannot close out — you already submitted an inservice sheet for this time period (session on ${overlap.date}, ${overlap.startTime}). Contact a supervisor if this is a correction.`
+    );
+    err.statusCode = 409;
     throw err;
   }
 
@@ -169,19 +188,23 @@ export async function performCloseOut(sessionId: string, options: CloseOutOption
   // Best-effort: generate the filled-in in-service sign-in sheet now that
   // the session is completed. Hour-crediting above has already fully
   // committed, so a template/R2 problem here must degrade to "no sheet yet"
-  // rather than ever blocking or rolling back close-out.
-  try {
-    const { buffer } = await generateInserviceSheet(sessionId);
-    const key = `inservice-sheets/${moment(sessionData.date || closeOutTime).format('YYYY/MM')}/${sessionId}.docx`;
-    await r2Client.send(new PutObjectCommand({
-      Bucket: getBucketName(),
-      Key: key,
-      Body: buffer,
-      ContentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-    }));
-    await sessionRef.update({ inserviceSheetKey: key });
-  } catch (error) {
-    console.warn(`[close-out] Failed to generate in-service sheet for session ${sessionId}:`, (error as Error).message);
+  // rather than ever blocking or rolling back close-out. A session nobody
+  // checked into has nothing to sign, so it's skipped entirely rather than
+  // producing an empty sheet on the Sign-In Sheets page.
+  if (checkins.length > 0) {
+    try {
+      const { buffer } = await generateInserviceSheet(sessionId);
+      const key = `inservice-sheets/${moment(sessionData.date || closeOutTime).format('YYYY/MM')}/${sessionId}.docx`;
+      await r2Client.send(new PutObjectCommand({
+        Bucket: getBucketName(),
+        Key: key,
+        Body: buffer,
+        ContentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      }));
+      await sessionRef.update({ inserviceSheetKey: key });
+    } catch (error) {
+      console.warn(`[close-out] Failed to generate in-service sheet for session ${sessionId}:`, (error as Error).message);
+    }
   }
 
   return {
