@@ -22,8 +22,14 @@ const getBucketName = () => {
 // that a leaked/cached link stops working well before it could be reused.
 const SIGNED_URL_EXPIRY_SECONDS = 5 * 60;
 
-async function getSignedSheetImageUrl(key: string): Promise<string> {
-  const command = new GetObjectCommand({ Bucket: getBucketName(), Key: key });
+// `downloadFilename` sets Content-Disposition on the signed URL so the
+// browser saves the file under a clean name instead of the raw R2 key.
+async function getSignedSheetImageUrl(key: string, downloadFilename?: string): Promise<string> {
+  const command = new GetObjectCommand({
+    Bucket: getBucketName(),
+    Key: key,
+    ...(downloadFilename ? { ResponseContentDisposition: `attachment; filename="${downloadFilename}"` } : {}),
+  });
   return getSignedUrl(r2Client, command, { expiresIn: SIGNED_URL_EXPIRY_SECONDS });
 }
 

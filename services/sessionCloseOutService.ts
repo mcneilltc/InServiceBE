@@ -194,12 +194,12 @@ export async function performCloseOut(sessionId: string, options: CloseOutOption
   if (checkins.length > 0) {
     try {
       const { buffer } = await generateInserviceSheet(sessionId);
-      const key = `inservice-sheets/${moment(sessionData.date || closeOutTime).format('YYYY/MM')}/${sessionId}.docx`;
+      const key = `inservice-sheets/${moment(sessionData.date || closeOutTime).format('YYYY/MM')}/${sessionId}.pdf`;
       await r2Client.send(new PutObjectCommand({
         Bucket: getBucketName(),
         Key: key,
         Body: buffer,
-        ContentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        ContentType: 'application/pdf',
       }));
       await sessionRef.update({ inserviceSheetKey: key });
     } catch (error) {

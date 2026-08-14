@@ -252,12 +252,17 @@ router.get('/:sessionId/inservice-sheet', requireRole(STAFF), async (req, res) =
       return res.status(404).json({ message: 'Session not found.' });
     }
 
-    const key = sessionDoc.data()?.inserviceSheetKey;
+    const sessionData = sessionDoc.data();
+    const key = sessionData?.inserviceSheetKey;
     if (!key) {
       return res.status(404).json({ message: 'No in-service sheet has been generated for this session.' });
     }
 
-    res.json({ url: await getSignedSheetImageUrl(key) });
+    const dateLabel = sessionData?.date ? moment(sessionData.date).format('YYYY-MM-DD') : moment().format('YYYY-MM-DD');
+    const locationLabel = (sessionData?.location || 'Session').replace(/[^a-zA-Z0-9]+/g, '_');
+    const filename = `Inservice_SignIn_Sheet_${locationLabel}_${dateLabel}.pdf`;
+
+    res.json({ url: await getSignedSheetImageUrl(key, filename) });
   } catch (error) {
     console.error('Error getting in-service sheet:', error);
     res.status(500).json({ error: 'Failed to get in-service sheet' });
