@@ -10,17 +10,18 @@ import { findDuplicateSheetSession } from '../services/sheetDuplicateCheck';
 import { getSignedSheetImageUrl, r2Client, getBucketName } from '../config/r2';
 import { parseLocalDate } from '../utils/dateParsing';
 import { getMandatoryTopicsForDate } from '../services/mandatoryTopicsService';
+import { rolesAtLeast } from '../utils/roles';
 
-const STAFF = ['supervisor', 'trainer'];
+const STAFF = rolesAtLeast('trainer');
 
-// Live-checked against Firestore, not req.user.canDeleteSignInSheets — a
-// claim baked into the session JWT at login can go stale for hours after an
-// admin grants/revokes it (same reasoning as canAddManualHours and
-// canManageMandatoryTopics elsewhere in this app).
+// Live-checked against Firestore, not req.user.role (the session JWT's
+// baked-in claim) — a demotion out of Senior Supervisor must take away this
+// ability on the very next request, not whenever the actor's session
+// happens to refresh (up to 12h later).
 async function hasDeleteSignInSheetsPermission(user: any): Promise<boolean> {
   if (!user?.employeeId) return false;
   const doc = await db.collection('employees').doc(user.employeeId).get();
-  return doc.data()?.canDeleteSignInSheets === true;
+  return rolesAtLeast('seniorSupervisor').includes(doc.data()?.role);
 }
 
 // Create a new training session (standalone, not tied to specific employee)
@@ -259,7 +260,7 @@ router.get('/:sessionId/images', requireRole(STAFF), async (req, res) => {
 // spliced together rather than using arrayRemove — two different photos
 // could in principle share a content hash, and arrayRemove deletes every
 // matching value, not just the one at this index.
-router.delete('/:sessionId/images/:index', requireRole(['supervisor']), async (req: any, res) => {
+router.delete('/:sessionId/images/:index', requireRole(rolesAtLeast('supervisor')), async (req: any, res) => {
   try {
     if (!(await hasDeleteSignInSheetsPermission(req.user))) {
       return res.status(403).json({ message: 'You do not have permission to delete sign-in sheets. Contact an administrator to request access.' });
@@ -340,7 +341,7 @@ router.get('/:sessionId/inservice-sheet', requireRole(STAFF), async (req, res) =
 // and the key on the session doc. Doesn't touch credited hours (those were
 // already committed at close-out; see sessionCloseOutService.ts) — this only
 // removes the document itself, e.g. to regenerate or correct a bad sheet.
-router.delete('/:sessionId/inservice-sheet', requireRole(['supervisor']), async (req: any, res) => {
+router.delete('/:sessionId/inservice-sheet', requireRole(rolesAtLeast('supervisor')), async (req: any, res) => {
   try {
     if (!(await hasDeleteSignInSheetsPermission(req.user))) {
       return res.status(403).json({ message: 'You do not have permission to delete sign-in sheets. Contact an administrator to request access.' });

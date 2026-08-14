@@ -5,6 +5,7 @@ const { db } = require('../config/firebase');
 const { requireRole } = require('../middleware/requireRole');
 const { clampSitesToScope } = require('../services/authService');
 const moment = require('moment');
+import { rolesAtLeast } from '../utils/roles';
 import { selfCheckin } from '../controllers/checkinController';
 import { uploadSignature } from '../services/signatureStorage';
 
@@ -177,7 +178,7 @@ router.post('/self', (req, res, next) => {
 // Scoping to a rolling window turns that into a fixed-size read.
 const RECENT_CHECKINS_WINDOW_DAYS = 30;
 
-router.get('/', requireRole(['supervisor']), async (req: any, res) => {
+router.get('/', requireRole(rolesAtLeast('supervisor')), async (req: any, res) => {
   try {
     const { location, homeSite } = req.query;
 

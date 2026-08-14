@@ -226,7 +226,7 @@ describe('Upload Sheet duplicate detection', () => {
   describe('POST /api/sessions/from-sheet', () => {
     it('creates a session and stores its image hashes', async () => {
       const employeeId = await makeEmployee();
-      const trainerId = await makeEmployee({ name: 'Test Trainer', isTrainer: true });
+      const trainerId = await makeEmployee({ name: 'Test Trainer', role: 'trainer' });
 
       const response = await request(app)
         .post('/api/sessions/from-sheet')
@@ -253,7 +253,7 @@ describe('Upload Sheet duplicate detection', () => {
 
     it('saves (does not block) a session flagged as a possible duplicate, and records the flag', async () => {
       const employeeId = await makeEmployee();
-      const trainerId = await makeEmployee({ name: 'Test Trainer', isTrainer: true });
+      const trainerId = await makeEmployee({ name: 'Test Trainer', role: 'trainer' });
 
       const flaggedOf = await db.collection('sessions').add({
         date: '2026-06-01',
@@ -293,7 +293,7 @@ describe('Upload Sheet duplicate detection', () => {
 
     it('rejects a sheet whose image hash matches an already-saved session', async () => {
       const employeeId = await makeEmployee();
-      const trainerId = await makeEmployee({ name: 'Test Trainer', isTrainer: true });
+      const trainerId = await makeEmployee({ name: 'Test Trainer', role: 'trainer' });
 
       const existing = await db.collection('sessions').add({
         date: '2026-07-01',

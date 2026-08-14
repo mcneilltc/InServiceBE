@@ -181,7 +181,7 @@ describe('GET /api/checkin', () => {
 
     const response = await request(app)
       .get('/api/checkin')
-      .set('Cookie', authCookie({ supervisorScope: 'locations', supervisorLocations: ['MCAC'] }));
+      .set('Cookie', authCookie({ role: 'supervisor', supervisorLocations: ['MCAC'] }));
 
     expect(response.status).toBe(200);
     const names = response.body.map((c: any) => c.name);
@@ -191,7 +191,7 @@ describe('GET /api/checkin', () => {
   it('rejects a trainer (supervisor-only route)', async () => {
     const response = await request(app)
       .get('/api/checkin')
-      .set('Cookie', authCookie({ role: 'trainer', supervisorScope: null }));
+      .set('Cookie', authCookie({ role: 'trainer' }));
 
     expect(response.status).toBe(403);
   });

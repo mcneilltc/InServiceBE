@@ -83,7 +83,7 @@ describe('POST /api/compliance/letter/:employeeId/send', () => {
     const employeeId = await makeEmployee();
     const response = await request(app)
       .post(`/api/compliance/letter/${employeeId}/send`)
-      .set('Cookie', authCookie({ role: 'trainer', supervisorScope: null }));
+      .set('Cookie', authCookie({ role: 'trainer' }));
 
     expect(response.status).toBe(403);
   });

@@ -14,8 +14,9 @@ const app = require('../app').default;
 const { db } = require('../config/firebase');
 const { authCookie } = require('./testHelpers');
 
-// Runs against the local Firestore emulator (see jest.setup.js).
-describe('DELETE sign-in sheets — canDeleteSignInSheets permission', () => {
+// Runs against the local Firestore emulator (see jest.setup.js). Deleting
+// sign-in sheets is bundled into Senior Supervisor and up (see utils/roles.ts).
+describe('DELETE sign-in sheets — role-based permission', () => {
   const createdEmployeeIds: string[] = [];
   const createdSessionIds: string[] = [];
 
@@ -25,14 +26,8 @@ describe('DELETE sign-in sheets — canDeleteSignInSheets permission', () => {
     for (const id of createdSessionIds.splice(0)) await db.collection('sessions').doc(id).delete();
   });
 
-  async function makeSupervisor(overrides: Record<string, any> = {}) {
-    const ref = await db.collection('employees').add({
-      name: 'Test Supervisor',
-      isSupervisor: true,
-      supervisorScope: 'all',
-      canDeleteSignInSheets: false,
-      ...overrides,
-    });
+  async function makeActor(role: string) {
+    const ref = await db.collection('employees').add({ name: 'Test Actor', role });
     createdEmployeeIds.push(ref.id);
     return ref.id;
   }
@@ -54,25 +49,25 @@ describe('DELETE sign-in sheets — canDeleteSignInSheets permission', () => {
   }
 
   describe('DELETE /api/sessions/:sessionId/images/:index', () => {
-    it('rejects a supervisor without the permission', async () => {
-      const employeeId = await makeSupervisor();
+    it('rejects a plain Supervisor — this is Senior Supervisor and up only', async () => {
+      const employeeId = await makeActor('supervisor');
       const sessionId = await makeSession();
 
       const response = await request(app)
         .delete(`/api/sessions/${sessionId}/images/0`)
-        .set('Cookie', authCookie({ employeeId }));
+        .set('Cookie', authCookie({ role: 'supervisor', employeeId }));
 
       expect(response.status).toBe(403);
       expect(sendMock).not.toHaveBeenCalled();
     });
 
     it('deletes the photo at the given index and keeps the arrays aligned', async () => {
-      const employeeId = await makeSupervisor({ canDeleteSignInSheets: true });
+      const employeeId = await makeActor('seniorSupervisor');
       const sessionId = await makeSession();
 
       const response = await request(app)
         .delete(`/api/sessions/${sessionId}/images/0`)
-        .set('Cookie', authCookie({ employeeId }));
+        .set('Cookie', authCookie({ role: 'seniorSupervisor', employeeId }));
 
       expect(response.status).toBe(200);
       expect(sendMock).toHaveBeenCalledTimes(1);
@@ -85,12 +80,12 @@ describe('DELETE sign-in sheets — canDeleteSignInSheets permission', () => {
     });
 
     it('404s for an out-of-range index', async () => {
-      const employeeId = await makeSupervisor({ canDeleteSignInSheets: true });
+      const employeeId = await makeActor('seniorSupervisor');
       const sessionId = await makeSession();
 
       const response = await request(app)
         .delete(`/api/sessions/${sessionId}/images/5`)
-        .set('Cookie', authCookie({ employeeId }));
+        .set('Cookie', authCookie({ role: 'seniorSupervisor', employeeId }));
 
       expect(response.status).toBe(404);
       expect(sendMock).not.toHaveBeenCalled();
@@ -100,32 +95,32 @@ describe('DELETE sign-in sheets — canDeleteSignInSheets permission', () => {
       const sessionId = await makeSession();
       const response = await request(app)
         .delete(`/api/sessions/${sessionId}/images/0`)
-        .set('Cookie', authCookie({ role: 'trainer', supervisorScope: null }));
+        .set('Cookie', authCookie({ role: 'trainer' }));
 
       expect(response.status).toBe(403);
     });
   });
 
   describe('DELETE /api/sessions/:sessionId/inservice-sheet', () => {
-    it('rejects a supervisor without the permission', async () => {
-      const employeeId = await makeSupervisor();
+    it('rejects a plain Supervisor — this is Senior Supervisor and up only', async () => {
+      const employeeId = await makeActor('supervisor');
       const sessionId = await makeSession();
 
       const response = await request(app)
         .delete(`/api/sessions/${sessionId}/inservice-sheet`)
-        .set('Cookie', authCookie({ employeeId }));
+        .set('Cookie', authCookie({ role: 'supervisor', employeeId }));
 
       expect(response.status).toBe(403);
       expect(sendMock).not.toHaveBeenCalled();
     });
 
     it('deletes the R2 object and clears inserviceSheetKey', async () => {
-      const employeeId = await makeSupervisor({ canDeleteSignInSheets: true });
+      const employeeId = await makeActor('seniorSupervisor');
       const sessionId = await makeSession();
 
       const response = await request(app)
         .delete(`/api/sessions/${sessionId}/inservice-sheet`)
-        .set('Cookie', authCookie({ employeeId }));
+        .set('Cookie', authCookie({ role: 'seniorSupervisor', employeeId }));
 
       expect(response.status).toBe(200);
       expect(sendMock).toHaveBeenCalledTimes(1);
@@ -137,12 +132,12 @@ describe('DELETE sign-in sheets — canDeleteSignInSheets permission', () => {
     });
 
     it('404s when no sheet has been generated for this session', async () => {
-      const employeeId = await makeSupervisor({ canDeleteSignInSheets: true });
+      const employeeId = await makeActor('seniorSupervisor');
       const sessionId = await makeSession({ inserviceSheetKey: null });
 
       const response = await request(app)
         .delete(`/api/sessions/${sessionId}/inservice-sheet`)
-        .set('Cookie', authCookie({ employeeId }));
+        .set('Cookie', authCookie({ role: 'seniorSupervisor', employeeId }));
 
       expect(response.status).toBe(404);
     });

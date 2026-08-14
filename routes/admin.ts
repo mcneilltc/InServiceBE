@@ -3,10 +3,11 @@ const express = require('express');
 const router = express.Router();
 const { db } = require('../config/firebase');
 const { requireRole } = require('../middleware/requireRole');
+import { rolesAtLeast } from '../utils/roles';
 
 // Get admin whitelist (trainers' emails) — supervisor-only; no reason this
 // should be publicly readable now that we can actually enforce that.
-router.get('/whitelist', requireRole(['supervisor']), async (req, res) => {
+router.get('/whitelist', requireRole(rolesAtLeast('supervisor')), async (req, res) => {
   try {
     const trainersSnapshot = await db.collection('employees').where('isTrainer', '==', true).get();
     const whitelist = [];

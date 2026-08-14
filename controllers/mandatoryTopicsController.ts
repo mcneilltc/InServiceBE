@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { db } from '../config/firebase';
+import { rolesAtLeast } from '../utils/roles';
 import {
   WEEK_KEYS,
   emptyWeeks,
@@ -36,11 +37,12 @@ export const getForDate = async (req: Request, res: Response, next: NextFunction
 };
 
 // PUT /:yearMonth — checked live against the acting supervisor's own
-// Firestore record, not req.user.canManageMandatoryTopics (the session
-// JWT's baked-in claim) — same reasoning as the canAddManualHours fix in
+// Firestore record, not req.user.role (the session JWT's baked-in claim) —
+// same reasoning as the manual-hours check in
 // trainingSessionsController.createSession: a claim baked in at login can
-// go stale for hours after an admin changes it, so a revoke/grant here must
-// take effect on the very next request, not the supervisor's next login.
+// go stale for hours after a demotion, so it must take effect on the very
+// next request, not the supervisor's next login. Managing the schedule is
+// bundled into Senior Supervisor and up — a plain Supervisor never has it.
 export const setForMonth = async (req: any, res: Response, next: NextFunction) => {
   try {
     const yearMonth = String(req.params.yearMonth);
@@ -51,10 +53,10 @@ export const setForMonth = async (req: any, res: Response, next: NextFunction) =
     // No employeeId on the session to look up (shouldn't happen for a real
     // login — authService.resolveRole always sets it — but fall back to the
     // JWT claim rather than crashing on Firestore's .doc(falsy)).
-    const liveCanManage = req.user.employeeId
-      ? (await db.collection('employees').doc(req.user.employeeId).get()).data()?.canManageMandatoryTopics === true
-      : req.user.canManageMandatoryTopics === true;
-    if (!liveCanManage) {
+    const liveRole = req.user.employeeId
+      ? (await db.collection('employees').doc(req.user.employeeId).get()).data()?.role
+      : req.user.role;
+    if (!rolesAtLeast('seniorSupervisor').includes(liveRole)) {
       return res.status(403).json({
         message: 'You do not have permission to manage the mandatory topics schedule. Contact an administrator to request access.',
       });

@@ -75,10 +75,11 @@ import topicTallyRoutes from './routes/topicTally';
 // import employeeAuthRoutes from './routes/employeeAuth';
 import incentiveRoutes from './routes/incentives';
 import { runSessionAutomationCheck } from './services/sessionAutomation';
+import { rolesAtLeast } from './utils/roles';
 const { requireRole } = require('./middleware/requireRole');
 
-const SUPERVISOR = requireRole(['supervisor']);
-const STAFF = requireRole(['supervisor', 'trainer']);
+const SUPERVISOR = requireRole(rolesAtLeast('supervisor'));
+const STAFF = requireRole(rolesAtLeast('trainer'));
 
 app.use('/api/auth', authRoutes);
 app.use('/api/employees', employeeRoutes);
@@ -129,9 +130,7 @@ if (process.env.ENABLE_DEV_LOGIN === 'true' && process.env.NODE_ENV !== 'product
       email,
       name: resolved.name || 'Dev Test',
       role: resolved.role,
-      supervisorScope: resolved.supervisorScope || null,
       supervisorLocations: resolved.supervisorLocations || [],
-      canAddManualHours: resolved.canAddManualHours ?? null,
       employeeId: resolved.employeeId || null,
     };
     const token = jwt.sign(claims, process.env.SESSION_SECRET, { expiresIn: SESSION_MAX_AGE_SECONDS });

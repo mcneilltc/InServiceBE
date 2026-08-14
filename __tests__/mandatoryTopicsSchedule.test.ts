@@ -15,12 +15,8 @@ describe('Mandatory topics schedule', () => {
     for (const id of createdMonthDocIds.splice(0)) await db.collection('mandatoryTopics').doc(id).delete();
   });
 
-  async function makeSupervisor(overrides: Record<string, any> = {}) {
-    const ref = await db.collection('employees').add({
-      name: 'Test Supervisor',
-      isSupervisor: true,
-      ...overrides,
-    });
+  async function makeActor(role: string) {
+    const ref = await db.collection('employees').add({ name: 'Test Actor', role });
     createdEmployeeIds.push(ref.id);
     return ref.id;
   }
@@ -38,57 +34,6 @@ describe('Mandatory topics schedule', () => {
 
     it('a 28-day February never reaches week 5', () => {
       expect(getWeekOfMonth('2026-02-28')).toBe(4);
-    });
-  });
-
-  describe('permission persistence (opt-in, unlike canAddManualHours)', () => {
-    it('defaults a new supervisor to canManageMandatoryTopics: false (not granted)', async () => {
-      const response = await request(app)
-        .post('/api/employees')
-        .set('Cookie', authCookie())
-        .send({ name: 'New Supervisor', isSupervisor: true });
-
-      expect(response.status).toBe(201);
-      createdEmployeeIds.push(response.body.id);
-      expect(response.body.employee.canManageMandatoryTopics).toBe(false);
-    });
-
-    it('stores null for a non-supervisor regardless of the submitted value', async () => {
-      const response = await request(app)
-        .post('/api/employees')
-        .set('Cookie', authCookie())
-        .send({ name: 'Just A Trainer', isSupervisor: false, isTrainer: true, canManageMandatoryTopics: true });
-
-      expect(response.status).toBe(201);
-      createdEmployeeIds.push(response.body.id);
-      expect(response.body.employee.canManageMandatoryTopics).toBeNull();
-    });
-
-    it('respects an explicit true on create', async () => {
-      const response = await request(app)
-        .post('/api/employees')
-        .set('Cookie', authCookie())
-        .send({ name: 'Designated Supervisor', isSupervisor: true, canManageMandatoryTopics: true });
-
-      expect(response.status).toBe(201);
-      createdEmployeeIds.push(response.body.id);
-      expect(response.body.employee.canManageMandatoryTopics).toBe(true);
-    });
-
-    it('can be granted and revoked via update', async () => {
-      const employeeId = await makeSupervisor();
-
-      const grant = await request(app)
-        .put(`/api/employees/${employeeId}`)
-        .set('Cookie', authCookie())
-        .send({ canManageMandatoryTopics: true });
-      expect(grant.body.employee.canManageMandatoryTopics).toBe(true);
-
-      const revoke = await request(app)
-        .put(`/api/employees/${employeeId}`)
-        .set('Cookie', authCookie())
-        .send({ canManageMandatoryTopics: false });
-      expect(revoke.body.employee.canManageMandatoryTopics).toBe(false);
     });
   });
 
@@ -122,53 +67,53 @@ describe('Mandatory topics schedule', () => {
   });
 
   describe('PUT /api/mandatory-topics/:yearMonth', () => {
-    it('rejects a supervisor without canManageMandatoryTopics granted', async () => {
-      const supervisorId = await makeSupervisor({ canManageMandatoryTopics: false });
+    it('rejects a plain Supervisor — managing the schedule is Senior Supervisor and up only', async () => {
+      const actorId = await makeActor('supervisor');
 
       const response = await request(app)
         .put('/api/mandatory-topics/2026-09')
-        .set('Cookie', authCookie({ employeeId: supervisorId }))
+        .set('Cookie', authCookie({ role: 'supervisor', employeeId: actorId }))
         .send({ weeks: { '1': ['CPR'] } });
 
       expect(response.status).toBe(403);
     });
 
-    it('allows a supervisor with canManageMandatoryTopics granted, and persists the schedule', async () => {
-      const supervisorId = await makeSupervisor({ canManageMandatoryTopics: true });
+    it('allows a Senior Supervisor, and persists the schedule', async () => {
+      const actorId = await makeActor('seniorSupervisor');
       createdMonthDocIds.push('2026-09');
 
       const response = await request(app)
         .put('/api/mandatory-topics/2026-09')
-        .set('Cookie', authCookie({ employeeId: supervisorId }))
+        .set('Cookie', authCookie({ role: 'seniorSupervisor', employeeId: actorId }))
         .send({ weeks: { '1': ['CPR'], '3': ['EAP'] } });
 
       expect(response.status).toBe(200);
 
       const saved = await db.collection('mandatoryTopics').doc('2026-09').get();
       expect(saved.data().weeks).toEqual({ '1': ['CPR'], '2': [], '3': ['EAP'], '4': [], '5': [] });
-      expect(saved.data().updatedByEmployeeId).toBe(supervisorId);
+      expect(saved.data().updatedByEmployeeId).toBe(actorId);
     });
 
     // Regression coverage for the same class of bug fixed in
     // manualHoursPermission.test.ts — the live Firestore value must win
     // over whatever the session JWT happened to claim at login.
-    it('blocks immediately when Firestore has it false, even if the stale session JWT claims true', async () => {
-      const supervisorId = await makeSupervisor({ canManageMandatoryTopics: false });
+    it('blocks immediately when demoted to Supervisor in Firestore, even if the stale session JWT still claims seniorSupervisor', async () => {
+      const actorId = await makeActor('supervisor');
 
       const response = await request(app)
         .put('/api/mandatory-topics/2026-09')
-        .set('Cookie', authCookie({ employeeId: supervisorId, canManageMandatoryTopics: true }))
+        .set('Cookie', authCookie({ role: 'seniorSupervisor', employeeId: actorId }))
         .send({ weeks: { '1': ['CPR'] } });
 
       expect(response.status).toBe(403);
     });
 
     it('rejects an invalid week key', async () => {
-      const supervisorId = await makeSupervisor({ canManageMandatoryTopics: true });
+      const actorId = await makeActor('seniorSupervisor');
 
       const response = await request(app)
         .put('/api/mandatory-topics/2026-09')
-        .set('Cookie', authCookie({ employeeId: supervisorId }))
+        .set('Cookie', authCookie({ role: 'seniorSupervisor', employeeId: actorId }))
         .send({ weeks: { '6': ['CPR'] } });
 
       expect(response.status).toBe(400);

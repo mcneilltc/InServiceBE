@@ -8,6 +8,7 @@ const { verifyGoogleToken, verifyMicrosoftToken, verifyYahooToken } = require('.
 const { resolveRole } = require('../services/authService');
 const { COOKIE_OPTIONS, SESSION_MAX_AGE_SECONDS, requireRole } = require('../middleware/requireRole');
 const { sendEmailWithProvider } = require('../services/messagingService');
+import { rolesAtLeast } from '../utils/roles';
 
 const getSessionSecret = () => process.env.SESSION_SECRET;
 
@@ -82,9 +83,7 @@ async function completeLogin(res: any, email: string, name: string | null, provi
     email,
     name: resolved.name || name || null,
     role: resolved.role,
-    supervisorScope: resolved.supervisorScope || null,
     supervisorLocations: resolved.supervisorLocations || [],
-    canAddManualHours: resolved.canAddManualHours ?? null,
     employeeId: resolved.employeeId || null,
     provider: provider || null,
     accessToken: accessToken || null,
@@ -180,7 +179,7 @@ router.post('/logout', (req, res) => {
 // POST /api/auth/send-email
 // Expects an authenticated session cookie and a provider-scoped access token
 // (for example a Microsoft Graph access token obtained during the SSO flow).
-router.post('/send-email', requireRole(['supervisor', 'trainer']), async (req, res) => {
+router.post('/send-email', requireRole(rolesAtLeast('trainer')), async (req, res) => {
   try {
     const { to, subject, html, provider, accessToken } = req.body || {};
     const user = req.user;
