@@ -140,6 +140,13 @@ function shapeEmployeeForResponse(employeeId: string, employeeData: FirebaseFire
     hasSlideCert: employeeData.hasSlideCert || false,
     hasSwimCert: employeeData.hasSwimCert || false,
     isEliteSupervisor: employeeData.isEliteSupervisor || false,
+    // Profile fields shown on the detail view but not the Manage Employees
+    // table row — that table only shows what's useful for scanning a list.
+    email: employeeData.email || '',
+    position: employeeData.position || '',
+    locations: Array.isArray(employeeData.locations) ? employeeData.locations : [],
+    role: employeeData.role || null,
+    hireDate: employeeData.hireDate || null,
   };
 }
 

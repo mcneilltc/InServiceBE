@@ -110,6 +110,29 @@ describe('Employee self-service lookup / manager detail', () => {
       expect(response.body.incentive).toHaveProperty('currentStreak');
     });
 
+    // The Manage Employees table only shows what's useful for scanning a
+    // list (Name, Role, Home Location) — everything else moved here.
+    it('includes the profile fields the Manage Employees table no longer shows inline', async () => {
+      const employeeId = await makeEmployee({
+        email: 'jamie@example.com',
+        position: 'Lifeguard',
+        locations: ['MCAC', 'ERRC'],
+        role: 'trainer',
+        hireDate: '2024-01-15',
+      });
+
+      const response = await request(app)
+        .get(`/api/employees/${employeeId}/detail`)
+        .set('Cookie', authCookie());
+
+      expect(response.status).toBe(200);
+      expect(response.body.employee.email).toBe('jamie@example.com');
+      expect(response.body.employee.position).toBe('Lifeguard');
+      expect(response.body.employee.locations).toEqual(['MCAC', 'ERRC']);
+      expect(response.body.employee.role).toBe('trainer');
+      expect(response.body.employee.hireDate).toBe('2024-01-15');
+    });
+
     it('404s for an employee that does not exist', async () => {
       const response = await request(app)
         .get('/api/employees/does-not-exist/detail')

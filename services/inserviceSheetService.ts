@@ -1,8 +1,14 @@
+import fs from 'fs';
+import path from 'path';
 import moment from 'moment';
 import { PDFDocument, StandardFonts, rgb, PDFFont, PDFPage } from 'pdf-lib';
 import { db } from '../config/firebase';
 import { getSignatureBuffer } from './signatureStorage';
 import { wrapText } from '../utils/pdfText';
+
+// The Park and Recreation logo, kept from the original Word template's page
+// header (see complianceLetterService.ts's SEAL_PATH for the same pattern).
+const LOGO_PATH = path.join(__dirname, '..', 'templates', 'assets', 'park-rec-logo.png');
 
 // The 12 fixed checklist labels, normalized (trimmed, lowercased, no blank
 // fill-in lines). The 13th bullet is "Other" — handled separately below.
@@ -135,53 +141,122 @@ export async function generateInserviceSheet(sessionId: string): Promise<Inservi
     y -= gapAfter;
   };
 
-  // --- Header / instructions section (matches the original form's text) ---
-  ensureSpace(20);
-  page.drawText('AQUATICS IN-SERVICE FORM', { x: MARGIN, y, size: 15, font: boldFont });
-  y -= 24;
+  // --- Letterhead: Park & Rec logo, centered (matches the original Word
+  // template's page header) ---
+  if (fs.existsSync(LOGO_PATH)) {
+    try {
+      const logoBytes = fs.readFileSync(LOGO_PATH);
+      const logoImage = await pdfDoc.embedPng(logoBytes);
+      const logoSize = 60;
+      page.drawImage(logoImage, { x: (PAGE_WIDTH - logoSize) / 2, y: y - logoSize, width: logoSize, height: logoSize });
+      y -= logoSize + 10;
+    } catch {
+      // Logo is decorative — a missing/unreadable asset must never block
+      // generating the actual sign-in sheet.
+    }
+  }
+
+  // --- Title block: bordered header bar (matches the original form) ---
+  ensureSpace(46);
+  page.drawLine({ start: { x: MARGIN, y }, end: { x: MARGIN + CONTENT_WIDTH, y }, thickness: 1, color: rgb(0, 0, 0) });
+  y -= 20;
+  drawCenteredText(page, 'AQUATICS IN-SERVICE FORM', boldFont, 15, MARGIN, CONTENT_WIDTH, y);
+  y -= 10;
+  page.drawLine({ start: { x: MARGIN, y }, end: { x: MARGIN + CONTENT_WIDTH, y }, thickness: 1, color: rgb(0, 0, 0) });
+  y -= 3;
+  page.drawLine({ start: { x: MARGIN, y }, end: { x: MARGIN + CONTENT_WIDTH, y }, thickness: 1, color: rgb(0, 0, 0) });
+  y -= 20;
 
   writeParagraph('Dear Aquatics Staff Members:', { bold: true, gapAfter: 4 });
   writeParagraph(
     'To ensure the safety of our members and program participants, you will be required to attend and participate in 4 hours of in-service on a monthly basis. In addition, you will be asked to sign the back of this form each in-service to indicate you have attended and participated in the required trainings.'
   );
 
+  // --- Checklist: square checkboxes, matching the original form's look.
+  // "Conditioning" and "First Aid" carry a blank fill-in line on the
+  // original paper form (for a hand-written detail) — reproduced as a
+  // blank line here too, since we don't capture that extra detail.
   writeParagraph('Check the Training that was received:', { bold: true, gapAfter: 4 });
+  const CHECKBOX_SIZE = 8;
+  const FILL_IN_INDICES = new Set([0, 3]);
   for (let i = 0; i < TOPIC_LABELS.length; i++) {
-    ensureSpace(14);
-    const mark = topicMarks[i] ? '[X]' : '[ ]';
-    page.drawText(`${mark} ${TOPIC_DISPLAY_LABELS[i]}`, { x: MARGIN + 8, y, size: 10, font: boldFont });
-    y -= 14;
+    ensureSpace(15);
+    drawCheckbox(page, MARGIN + 2, y, topicMarks[i], CHECKBOX_SIZE);
+    const labelX = MARGIN + 2 + CHECKBOX_SIZE + 6;
+    const label = `${TOPIC_DISPLAY_LABELS[i]}${FILL_IN_INDICES.has(i) ? ':' : ''}`;
+    page.drawText(label, { x: labelX, y, size: 10, font: boldFont });
+    if (FILL_IN_INDICES.has(i)) {
+      const lineStartX = labelX + boldFont.widthOfTextAtSize(label, 10) + 4;
+      page.drawLine({ start: { x: lineStartX, y: y - 1 }, end: { x: lineStartX + 160, y: y - 1 }, thickness: 0.75, color: rgb(0, 0, 0) });
+    }
+    y -= 15;
   }
-  const otherMark = otherText ? '[X]' : '[ ]';
-  ensureSpace(14);
-  page.drawText(`${otherMark} Other: ${otherText}`, { x: MARGIN + 8, y, size: 10, font: boldFont });
+  ensureSpace(15);
+  drawCheckbox(page, MARGIN + 2, y, !!otherText, CHECKBOX_SIZE);
+  const otherLabelX = MARGIN + 2 + CHECKBOX_SIZE + 6;
+  page.drawText('Other:', { x: otherLabelX, y, size: 10, font: boldFont });
+  const otherLineStartX = otherLabelX + boldFont.widthOfTextAtSize('Other:', 10) + 4;
+  if (otherText) {
+    page.drawText(truncateToWidth(font, otherText, 9, 160), { x: otherLineStartX, y, size: 9, font });
+  }
+  page.drawLine({ start: { x: otherLineStartX, y: y - 1 }, end: { x: otherLineStartX + 160, y: y - 1 }, thickness: 0.75, color: rgb(0, 0, 0) });
   y -= 20;
 
   writeParagraph(
     'Failure to acquire 4 hours of in-service monthly will lead to disciplinary action, up to and including termination. If you have any questions, please contact the Aquatics Supervisor at your site, immediately.',
-    { gapAfter: 16 }
+    { gapAfter: 12 }
   );
 
-  // --- Sign-in sheet section ---
-  ensureSpace(20);
-  page.drawText('Lifeguard In-Service Sign-In Sheet', { x: MARGIN, y, size: 13, font: boldFont });
-  y -= 22;
+  // --- Notes box with a narrow "Lifeguard In-Service Sign-In Sheet" side
+  // label — matches the original form's layout exactly. ---
+  const NOTES_BOX_HEIGHT = 60;
+  const LABEL_COL_WIDTH = 60;
+  ensureSpace(NOTES_BOX_HEIGHT);
+  const notesBoxTop = y;
+  page.drawRectangle({ x: MARGIN, y: notesBoxTop - NOTES_BOX_HEIGHT, width: CONTENT_WIDTH, height: NOTES_BOX_HEIGHT, borderColor: rgb(0, 0, 0), borderWidth: 0.75 });
+  page.drawLine({
+    start: { x: MARGIN + CONTENT_WIDTH - LABEL_COL_WIDTH, y: notesBoxTop },
+    end: { x: MARGIN + CONTENT_WIDTH - LABEL_COL_WIDTH, y: notesBoxTop - NOTES_BOX_HEIGHT },
+    thickness: 0.75,
+    color: rgb(0, 0, 0),
+  });
+  page.drawText('Notes:', { x: MARGIN + 4, y: notesBoxTop - 12, size: 9, font: boldFont });
 
-  ensureSpace(16);
-  page.drawText(`Led By: ${trainerNames.join(', ')}`, { x: MARGIN, y, size: 10, font: boldFont });
-  page.drawText(`Date: ${dateLabel}`, { x: MARGIN + 280, y, size: 10, font: boldFont });
-  y -= 16;
-  ensureSpace(16);
-  page.drawText(`Time: ${timeLabel}`, { x: MARGIN, y, size: 10, font: boldFont });
-  page.drawText(`Location: ${session.location || ''}`, { x: MARGIN + 280, y, size: 10, font: boldFont });
-  y -= 20;
+  const sideLabelLines = wrapText(boldFont, 'Lifeguard In-Service Sign-In Sheet', 9, LABEL_COL_WIDTH - 8);
+  let sideLabelY = notesBoxTop - NOTES_BOX_HEIGHT / 2 + (sideLabelLines.length * 11) / 2 - 8;
+  for (const line of sideLabelLines) {
+    drawCenteredText(page, line, boldFont, 9, MARGIN + CONTENT_WIDTH - LABEL_COL_WIDTH, LABEL_COL_WIDTH, sideLabelY);
+    sideLabelY -= 11;
+  }
+  y = notesBoxTop - NOTES_BOX_HEIGHT - 10;
+
+  // --- Led By / Date / Time / Location grid ---
+  const GRID_ROW_HEIGHT = 18;
+  const gridTop = y;
+  const gridMidX = MARGIN + CONTENT_WIDTH / 2;
+  ensureSpace(GRID_ROW_HEIGHT * 2);
+  page.drawRectangle({ x: MARGIN, y: gridTop - GRID_ROW_HEIGHT * 2, width: CONTENT_WIDTH, height: GRID_ROW_HEIGHT * 2, borderColor: rgb(0, 0, 0), borderWidth: 0.75 });
+  page.drawLine({ start: { x: MARGIN, y: gridTop - GRID_ROW_HEIGHT }, end: { x: MARGIN + CONTENT_WIDTH, y: gridTop - GRID_ROW_HEIGHT }, thickness: 0.75, color: rgb(0, 0, 0) });
+  page.drawLine({ start: { x: gridMidX, y: gridTop }, end: { x: gridMidX, y: gridTop - GRID_ROW_HEIGHT * 2 }, thickness: 0.75, color: rgb(0, 0, 0) });
+
+  page.drawText('Led By:', { x: MARGIN + 4, y: gridTop - 12, size: 9, font: boldFont });
+  page.drawText(truncateToWidth(font, trainerNames.join(', '), 9, gridMidX - MARGIN - 50), { x: MARGIN + 48, y: gridTop - 12, size: 9, font });
+  page.drawText('Date:', { x: gridMidX + 4, y: gridTop - 12, size: 9, font: boldFont });
+  page.drawText(dateLabel, { x: gridMidX + 38, y: gridTop - 12, size: 9, font });
+
+  page.drawText('Time:', { x: MARGIN + 4, y: gridTop - GRID_ROW_HEIGHT - 12, size: 9, font: boldFont });
+  page.drawText(timeLabel, { x: MARGIN + 38, y: gridTop - GRID_ROW_HEIGHT - 12, size: 9, font });
+  page.drawText('Location:', { x: gridMidX + 4, y: gridTop - GRID_ROW_HEIGHT - 12, size: 9, font: boldFont });
+  page.drawText(truncateToWidth(font, session.location || '', 9, CONTENT_WIDTH / 2 - 70), { x: gridMidX + 56, y: gridTop - GRID_ROW_HEIGHT - 12, size: 9, font });
+
+  y = gridTop - GRID_ROW_HEIGHT * 2 - 14;
 
   const drawTableHeader = () => {
     ensureSpace(HEADER_ROW_HEIGHT);
     let x = MARGIN;
-    page.drawRectangle({ x: MARGIN, y: y - HEADER_ROW_HEIGHT, width: CONTENT_WIDTH, height: HEADER_ROW_HEIGHT, color: rgb(0.85, 0.85, 0.85) });
+    page.drawRectangle({ x: MARGIN, y: y - HEADER_ROW_HEIGHT, width: CONTENT_WIDTH, height: HEADER_ROW_HEIGHT, color: rgb(0, 0, 0) });
     for (const col of COLUMNS) {
-      page.drawText(col.label, { x: x + 4, y: y - HEADER_ROW_HEIGHT + 6, size: 9, font: boldFont });
+      page.drawText(col.label, { x: x + 4, y: y - HEADER_ROW_HEIGHT + 6, size: 9, font: boldFont, color: rgb(1, 1, 1) });
       x += col.width;
     }
     drawRowBorders(page, y, HEADER_ROW_HEIGHT);
@@ -252,6 +327,23 @@ function drawRowBorders(page: PDFPage, topY: number, height: number) {
     x += col.width;
   }
   page.drawLine({ start: { x, y: topY }, end: { x, y: bottomY }, thickness: 0.5, color: rgb(0, 0, 0) });
+}
+
+// A square checkbox matching the original form's checklist style — an
+// outlined box, with an X drawn inside when the topic was covered.
+function drawCheckbox(page: PDFPage, x: number, textBaselineY: number, checked: boolean, size: number) {
+  const boxY = textBaselineY - 1;
+  page.drawRectangle({ x, y: boxY, width: size, height: size, borderColor: rgb(0, 0, 0), borderWidth: 0.75 });
+  if (checked) {
+    page.drawLine({ start: { x, y: boxY }, end: { x: x + size, y: boxY + size }, thickness: 0.75, color: rgb(0, 0, 0) });
+    page.drawLine({ start: { x, y: boxY + size }, end: { x: x + size, y: boxY }, thickness: 0.75, color: rgb(0, 0, 0) });
+  }
+}
+
+// Draws text horizontally centered within a container of the given x/width.
+function drawCenteredText(page: PDFPage, text: string, font: PDFFont, size: number, containerX: number, containerWidth: number, y: number) {
+  const textWidth = font.widthOfTextAtSize(text, size);
+  page.drawText(text, { x: containerX + (containerWidth - textWidth) / 2, y, size, font, color: rgb(0, 0, 0) });
 }
 
 // Cells are single-line — a name/location too long for its column is

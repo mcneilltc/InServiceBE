@@ -77,7 +77,11 @@ describe('generateComplianceLetter', () => {
         lines.push(Buffer.from(tm[1], 'hex').toString('latin1'));
       }
     }
-    return lines.join('\n');
+    // Space-joined, not newline-joined: the compliance letter draws some
+    // paragraphs one word per Tj (to underline a sub-phrase — see
+    // writeRichParagraph in complianceLetterService.ts), so a phrase can
+    // span several Tj operators even though it reads as one line.
+    return lines.join(' ');
   }
 
   it('fills in the employee name, hours missing, and upcoming sessions', async () => {
