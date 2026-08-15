@@ -41,6 +41,67 @@ export function isBulkImportedSession(s: FirebaseFirestore.DocumentData): boolea
   return s.trainer === 'Imported';
 }
 
+// A supervisor's manual correction of one employee's one month — e.g. a
+// paper sign-in sheet surfaces after the fact, or hours were logged under
+// the wrong employee/date and can't cleanly be re-attributed. Stored as a
+// per-employee subcollection (mirroring trainingSessions) rather than a
+// top-level collection, so "all overrides for employee X" is a bare
+// subcollection read with no where() clause, and archived employees' (soft
+// deleted, see employeesController.js) overrides fall out of the roster for
+// free the same way their trainingSessions already do.
+const OVERRIDES_SUBCOLLECTION = 'incentiveOverrides';
+
+export interface IncentiveOverride {
+  year: number;
+  month: number; // 1-12
+  qualified: boolean;
+  note?: string;
+  setByEmployeeId: string;
+  setByName: string;
+  updatedAt: string; // ISO
+}
+
+const EMPTY_OVERRIDES: Map<string, IncentiveOverride> = new Map();
+
+function overrideKey(year: number, month: number): string {
+  return `${year}-${month}`;
+}
+
+// One subcollection read regardless of how many months are being looked at
+// (this month, a long streak's lookback, a full annual grid) — same
+// one-read-per-employee philosophy as getAllSessions below.
+export async function getIncentiveOverrides(employeeId: string): Promise<Map<string, IncentiveOverride>> {
+  const snap = await db.collection('employees').doc(employeeId).collection(OVERRIDES_SUBCOLLECTION).get();
+  const map = new Map<string, IncentiveOverride>();
+  snap.forEach((doc: any) => map.set(doc.id, doc.data() as IncentiveOverride));
+  return map;
+}
+
+export async function setIncentiveOverride(
+  employeeId: string,
+  year: number,
+  month: number,
+  qualified: boolean,
+  note: string | undefined,
+  setBy: { employeeId: string; name: string }
+): Promise<void> {
+  const key = overrideKey(year, month);
+  const override: IncentiveOverride = {
+    year,
+    month,
+    qualified,
+    ...(note ? { note } : {}),
+    setByEmployeeId: setBy.employeeId,
+    setByName: setBy.name,
+    updatedAt: new Date().toISOString(),
+  };
+  await db.collection('employees').doc(employeeId).collection(OVERRIDES_SUBCOLLECTION).doc(key).set(override);
+}
+
+export async function clearIncentiveOverride(employeeId: string, year: number, month: number): Promise<void> {
+  await db.collection('employees').doc(employeeId).collection(OVERRIDES_SUBCOLLECTION).doc(overrideKey(year, month)).delete();
+}
+
 // Reads an employee's entire trainingSessions subcollection exactly once.
 // Every month-qualification computation below (this month, the streak
 // lookback, the annual grid) works off this same in-memory list instead of
@@ -91,16 +152,46 @@ export interface MonthQualification {
   // undefined = the 15th hasn't passed yet and hours haven't hit the
   // threshold, so this month's outcome isn't decided one way or the other yet.
   qualified: boolean | undefined;
+  isOverride?: boolean;
+  overrideNote?: string;
+  overrideSetByName?: string;
+  overrideSetAt?: string;
 }
 
 // A month's qualification, from the perspective of `asOf` (normally "now").
-// If hours already hit the threshold, it's qualified regardless of date —
-// that's locked in early, which is the whole point of the incentive. If the
-// threshold isn't met and the 15th has already passed (relative to asOf),
-// it's a confirmed miss. Otherwise (still time left before the 15th), the
-// outcome is undecided.
-function monthQualificationFrom(sessions: SessionRecord[], year: number, month: number, asOf: moment.Moment): MonthQualification {
+// A manual override always wins first — a supervisor's correction of the
+// record, not a recomputation of it, so the real `hours` are still returned
+// alongside it for context ("3 of 4 hours, but manually marked qualified")
+// and are never altered by the override (an override never un-excludes
+// bulk-imported hours, see isBulkImportedSession above — it only overrides
+// the outcome). Absent an override: if hours already hit the threshold,
+// it's qualified regardless of date — that's locked in early, which is the
+// whole point of the incentive. If the threshold isn't met and the 15th has
+// already passed (relative to asOf), it's a confirmed miss. Otherwise
+// (still time left before the 15th), the outcome is undecided.
+function monthQualificationFrom(
+  sessions: SessionRecord[],
+  year: number,
+  month: number,
+  asOf: moment.Moment,
+  overrides: Map<string, IncentiveOverride> = EMPTY_OVERRIDES
+): MonthQualification {
   const hours = hoursByThe15thFrom(sessions, year, month);
+
+  const override = overrides.get(overrideKey(year, month));
+  if (override) {
+    return {
+      year,
+      month,
+      hours,
+      qualified: override.qualified,
+      isOverride: true,
+      ...(override.note ? { overrideNote: override.note } : {}),
+      overrideSetByName: override.setByName,
+      overrideSetAt: override.updatedAt,
+    };
+  }
+
   if (hours >= INCENTIVE_HOURS_THRESHOLD) {
     return { year, month, hours, qualified: true };
   }
@@ -117,11 +208,11 @@ function monthQualificationFrom(sessions: SessionRecord[], year: number, month: 
 // current month's 15th has passed without qualifying, the streak is 0. If
 // the 15th hasn't passed and the threshold isn't met yet, the current month
 // is skipped (undecided) and the streak reflects fully-decided prior months.
-function streakFrom(sessions: SessionRecord[], asOf: moment.Moment): number {
+function streakFrom(sessions: SessionRecord[], asOf: moment.Moment, overrides: Map<string, IncentiveOverride> = EMPTY_OVERRIDES): number {
   let streak = 0;
   let cursor = asOf.clone().startOf('month');
 
-  const current = monthQualificationFrom(sessions, cursor.year(), cursor.month() + 1, asOf);
+  const current = monthQualificationFrom(sessions, cursor.year(), cursor.month() + 1, asOf, overrides);
   if (current.qualified === false) {
     return 0;
   }
@@ -134,7 +225,7 @@ function streakFrom(sessions: SessionRecord[], asOf: moment.Moment): number {
   // Cap the lookback so sparse/new employee history can't spin for years.
   const MAX_LOOKBACK_MONTHS = 60;
   for (let i = 0; i < MAX_LOOKBACK_MONTHS; i++) {
-    const result = monthQualificationFrom(sessions, cursor.year(), cursor.month() + 1, asOf);
+    const result = monthQualificationFrom(sessions, cursor.year(), cursor.month() + 1, asOf, overrides);
     if (result.qualified !== true) break;
     streak += 1;
     cursor = cursor.subtract(1, 'month');
@@ -154,14 +245,19 @@ export interface AnnualSummary {
 // year — how many were qualified vs. how many are already decided one way
 // or the other (excludes any still-undecided current month), plus the full
 // per-month breakdown for displaying a yearly grid.
-function annualSummaryFrom(sessions: SessionRecord[], year: number, asOf: moment.Moment): AnnualSummary {
+function annualSummaryFrom(
+  sessions: SessionRecord[],
+  year: number,
+  asOf: moment.Moment,
+  overrides: Map<string, IncentiveOverride> = EMPTY_OVERRIDES
+): AnnualSummary {
   const lastMonth = year === asOf.year() ? asOf.month() + 1 : 12; // 1-12
   let monthsQualified = 0;
   let monthsDecided = 0;
   const months: MonthQualification[] = [];
 
   for (let month = 1; month <= lastMonth; month++) {
-    const result = monthQualificationFrom(sessions, year, month, asOf);
+    const result = monthQualificationFrom(sessions, year, month, asOf, overrides);
     months.push(result);
     if (result.qualified === undefined) continue;
     monthsDecided++;
@@ -204,6 +300,7 @@ export interface EmployeeIncentiveSummary {
   hoursByThe15th: number;
   hoursNeeded: number;
   qualifiedThisMonth: boolean | undefined;
+  qualifiedThisMonthIsOverride?: boolean;
   deadlinePassed: boolean;
   currentStreak: number;
   currentTier: IncentiveTier | null;
@@ -225,19 +322,20 @@ export interface EmployeeIncentiveSummary {
 export async function getEmployeeIncentiveSummary(
   employeeId: string,
   asOf: moment.Moment = moment(),
-  preloaded?: { sessions?: SessionRecord[]; tiers?: IncentiveTier[] }
+  preloaded?: { sessions?: SessionRecord[]; tiers?: IncentiveTier[]; overrides?: Map<string, IncentiveOverride> }
 ): Promise<EmployeeIncentiveSummary> {
   const year = asOf.year();
   const month = asOf.month() + 1;
 
-  const [sessions, tiers] = await Promise.all([
+  const [sessions, tiers, overrides] = await Promise.all([
     preloaded?.sessions ?? getAllSessions(employeeId),
     preloaded?.tiers ?? getIncentiveTiers(),
+    preloaded?.overrides ?? getIncentiveOverrides(employeeId),
   ]);
 
-  const monthQual = monthQualificationFrom(sessions, year, month, asOf);
-  const streak = streakFrom(sessions, asOf);
-  const annual = annualSummaryFrom(sessions, year, asOf);
+  const monthQual = monthQualificationFrom(sessions, year, month, asOf, overrides);
+  const streak = streakFrom(sessions, asOf, overrides);
+  const annual = annualSummaryFrom(sessions, year, asOf, overrides);
 
   const { currentTier, nextTier } = getTierInfo(streak, tiers);
   const the15th = moment({ year, month: month - 1, day: 15 }).endOf('day');
@@ -247,6 +345,7 @@ export async function getEmployeeIncentiveSummary(
     hoursByThe15th: monthQual.hours,
     hoursNeeded: Math.max(0, INCENTIVE_HOURS_THRESHOLD - monthQual.hours),
     qualifiedThisMonth: monthQual.qualified,
+    ...(monthQual.isOverride ? { qualifiedThisMonthIsOverride: true } : {}),
     deadlinePassed: asOf.isAfter(the15th),
     currentStreak: streak,
     currentTier,
