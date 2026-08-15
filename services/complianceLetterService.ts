@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import moment from 'moment';
-import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
+import { PDFDocument, StandardFonts, rgb, PDFFont } from 'pdf-lib';
 import { db } from '../config/firebase';
 import { getEmployeeHoursForMonth } from '../controllers/complianceController';
 import { parseLocalDate } from '../utils/dateParsing';
@@ -13,8 +13,9 @@ const MAX_SESSIONS = 10;
 
 // The org's seal, kept from the original Word letterhead — everything else
 // in that template (the "Park and Recreation Department" word-art logo) was
-// a legacy WMF pdf-lib can't embed, so it's reproduced as styled text below
-// instead of trying to convert that asset.
+// a legacy WMF pdf-lib can't embed, so it's reproduced as centered styled
+// text below instead, matching the original memo's centered layout (see
+// the reference "Inservice Requirement Completion Documentation.docx").
 const SEAL_PATH = path.join(__dirname, '..', 'templates', 'assets', 'county-seal.png');
 
 const PAGE_WIDTH = 612;
@@ -114,9 +115,9 @@ export async function generateComplianceLetter(employeeId: string): Promise<Comp
   const nextMonthNote = `Beginning ${monthMoment.clone().add(1, 'month').format('MMMM')}, the standard 4-hour monthly inservice requirement resumes. At least 2 hours must be completed by the 15th, and the full 4 hours by the end of the month.`;
 
   const pdfDoc = await PDFDocument.create();
-  const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
-  const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
-  const italicFont = await pdfDoc.embedFont(StandardFonts.HelveticaOblique);
+  const font = await pdfDoc.embedFont(StandardFonts.TimesRoman);
+  const boldFont = await pdfDoc.embedFont(StandardFonts.TimesRomanBold);
+  const italicFont = await pdfDoc.embedFont(StandardFonts.TimesRomanItalic);
 
   let page = pdfDoc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
   let y = PAGE_HEIGHT - MARGIN;
@@ -129,7 +130,7 @@ export async function generateComplianceLetter(employeeId: string): Promise<Comp
   };
 
   // Paragraph writer: wraps to CONTENT_WIDTH, advances y, paginates as needed.
-  const writeParagraph = (text: string, { bold = false, italic = false, size = 11, gapAfter = 12, indent = 0 } = {}) => {
+  const writeParagraph = (text: string, { bold = false, italic = false, size = 12, gapAfter = 12, indent = 0 } = {}) => {
     const useFont = bold ? boldFont : italic ? italicFont : font;
     const lines = wrapText(useFont, text, size, CONTENT_WIDTH - indent);
     for (const line of lines) {
@@ -140,29 +141,99 @@ export async function generateComplianceLetter(employeeId: string): Promise<Comp
     y -= gapAfter;
   };
 
-  // Letterhead
+  const drawCentered = (text: string, useFont: PDFFont, size: number, yPos: number) => {
+    const textWidth = useFont.widthOfTextAtSize(text, size);
+    page.drawText(text, { x: MARGIN + (CONTENT_WIDTH - textWidth) / 2, y: yPos, size, font: useFont, color: rgb(0, 0, 0) });
+    return textWidth;
+  };
+
+  // A paragraph built from differently-styled runs (bold/underline mixed
+  // with regular text on the same line) — pdf-lib has no rich-text runs, so
+  // this wraps word-by-word across runs and underlines are drawn manually.
+  // Used for the one sentence the original memo visually emphasizes twice
+  // (bold *and* underlined): the compliance deadline.
+  const writeRichParagraph = (runs: { text: string; bold?: boolean; underline?: boolean }[], { size = 12, gapAfter = 12 } = {}) => {
+    const words = runs.flatMap((run) =>
+      run.text.split(/\s+/).filter(Boolean).map((text) => ({ text, bold: !!run.bold, underline: !!run.underline }))
+    );
+    const spaceWidth = font.widthOfTextAtSize(' ', size);
+
+    let line: typeof words = [];
+    let lineWidth = 0;
+
+    const flushLine = () => {
+      if (line.length === 0) return;
+      ensureSpace(size + 4);
+      let x = MARGIN;
+      // Underline runs are drawn as one continuous line (spaces included)
+      // rather than per-word, matching how Word underlines a phrase.
+      let underlineStartX: number | null = null;
+      for (const w of line) {
+        const useFont = w.bold ? boldFont : font;
+        const wWidth = useFont.widthOfTextAtSize(w.text, size);
+        page.drawText(w.text, { x, y, size, font: useFont, color: rgb(0, 0, 0) });
+        if (w.underline && underlineStartX === null) {
+          underlineStartX = x;
+        } else if (!w.underline && underlineStartX !== null) {
+          page.drawLine({ start: { x: underlineStartX, y: y - 2 }, end: { x, y: y - 2 }, thickness: 0.6, color: rgb(0, 0, 0) });
+          underlineStartX = null;
+        }
+        x += wWidth + spaceWidth;
+      }
+      if (underlineStartX !== null) {
+        page.drawLine({ start: { x: underlineStartX, y: y - 2 }, end: { x: x - spaceWidth, y: y - 2 }, thickness: 0.6, color: rgb(0, 0, 0) });
+      }
+      y -= size + 4;
+      line = [];
+      lineWidth = 0;
+    };
+
+    for (const w of words) {
+      const useFont = w.bold ? boldFont : font;
+      const wWidth = useFont.widthOfTextAtSize(w.text, size);
+      const extra = (line.length > 0 ? spaceWidth : 0) + wWidth;
+      if (lineWidth + extra > CONTENT_WIDTH && line.length > 0) {
+        flushLine();
+        lineWidth = wWidth;
+        line = [w];
+      } else {
+        lineWidth += extra;
+        line.push(w);
+      }
+    }
+    flushLine();
+    y -= gapAfter;
+  };
+
+  // Letterhead: seal centered above the centered department name/memo
+  // title, matching the original memo template's layout exactly.
   if (fs.existsSync(SEAL_PATH)) {
     try {
       const sealBytes = fs.readFileSync(SEAL_PATH);
       const sealImage = await pdfDoc.embedPng(sealBytes);
-      const sealHeight = 50;
+      const sealHeight = 65;
       const sealWidth = (sealImage.width / sealImage.height) * sealHeight;
-      page.drawImage(sealImage, { x: MARGIN, y: y - sealHeight + 10, width: sealWidth, height: sealHeight });
-      page.drawText('MECKLENBURG COUNTY', { x: MARGIN + sealWidth + 12, y: y - 8, size: 14, font: boldFont });
-      page.drawText('Park and Recreation Department', { x: MARGIN + sealWidth + 12, y: y - 24, size: 10, font });
-      y -= sealHeight + 10;
+      page.drawImage(sealImage, { x: MARGIN + (CONTENT_WIDTH - sealWidth) / 2, y: y - sealHeight, width: sealWidth, height: sealHeight });
+      y -= sealHeight + 14;
     } catch {
       // Seal is decorative — a missing/unreadable asset must never block
       // sending or downloading the actual compliance content.
     }
-  } else {
-    page.drawText('MECKLENBURG COUNTY', { x: MARGIN, y, size: 14, font: boldFont });
-    y -= 16;
-    page.drawText('Park and Recreation Department', { x: MARGIN, y, size: 10, font });
-    y -= 30;
   }
 
-  writeParagraph('MEMORANDUM', { bold: true, size: 13, gapAfter: 16 });
+  drawCentered('MECKLENBURG COUNTY', boldFont, 18, y);
+  y -= 22;
+  drawCentered('Park and Recreation Department', font, 13, y);
+  y -= 30;
+  const memoWidth = drawCentered('MEMORANDUM', boldFont, 13, y);
+  page.drawLine({
+    start: { x: MARGIN + (CONTENT_WIDTH - memoWidth) / 2, y: y - 2 },
+    end: { x: MARGIN + (CONTENT_WIDTH + memoWidth) / 2, y: y - 2 },
+    thickness: 0.75,
+    color: rgb(0, 0, 0),
+  });
+  y -= 28;
+
   writeParagraph(`Good Morning ${firstName},`, { gapAfter: 12 });
   writeParagraph(
     'The Park and Recreation Department has tried contacting you several times as it pertains to your completion of the required in services for your position as a Lifeguard with Mecklenburg County.'
@@ -172,15 +243,16 @@ export async function generateComplianceLetter(employeeId: string): Promise<Comp
   writeParagraph(
     'Mecklenburg County Lifeguards per StarGuardELITE certification policy, procedures, and standards, are required to complete and maintain a minimum of 4 hours of in-service training per month, in order to maintain a current and valid lifeguard certification. Lifeguards who do not complete their 4 hours of monthly in-service, are ineligible be on stand as a lifeguard until the in-service hours have been completed.'
   );
-  writeParagraph(
-    `In order to remain compliant with policy, you will need to complete ${hoursMissing.toFixed(1)} hours by ${endOfMonthDate}. I have provided you with a list of opportunities to complete the required inservices.`,
-    { bold: true }
-  );
+  writeRichParagraph([
+    { text: 'In order to remain compliant with policy, you will need to complete', bold: true },
+    { text: `${hoursMissing.toFixed(1)} hours by ${endOfMonthDate}.`, bold: true, underline: true },
+    { text: 'I have provided you with a list of opportunities to complete the required inservices.' },
+  ]);
   writeParagraph('You can complete these inservices at the following locations:', { gapAfter: 6 });
 
   for (const line of sessionLines) {
     ensureSpace(16);
-    page.drawText('•', { x: MARGIN, y, size: 11, font });
+    page.drawText('•', { x: MARGIN, y, size: 12, font });
     writeParagraph(line, { indent: 14, gapAfter: 4 });
   }
   y -= 6;

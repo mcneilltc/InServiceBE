@@ -2,7 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { db } from '../config/firebase';
 import { z } from 'zod';
 import moment from 'moment';
-import { getEmployeeIncentiveSummary, getIncentiveTiers } from '../services/incentiveService';
+import { getEmployeeIncentiveSummary, getIncentiveTiers, setIncentiveOverride, clearIncentiveOverride } from '../services/incentiveService';
 const { clampSitesToScope } = require('../services/authService');
 
 export const tierSchema = z.object({
@@ -13,6 +13,16 @@ export const tierSchema = z.object({
 });
 
 export const updateTierSchema = tierSchema;
+
+export const overrideSchema = z.object({
+  body: z.object({
+    employeeId: z.string().min(1, 'employeeId is required'),
+    year: z.number({ message: 'year is required' }).int().min(2000).max(2100),
+    month: z.number({ message: 'month is required' }).int().min(1).max(12),
+    qualified: z.boolean({ message: 'qualified is required' }),
+    note: z.string().max(500).optional(),
+  }),
+});
 
 function parseSites(value: any): string[] | null {
   if (!value || value === 'all') return null;
@@ -94,6 +104,54 @@ export const deleteTier = async (req: Request, res: Response, next: NextFunction
     }
     await docRef.delete();
     res.json({ message: 'Incentive tier deleted' });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// PUT /api/incentives/override
+// A supervisor's manual correction of one employee's one month's
+// qualification — see incentiveService.ts's monthQualificationFrom for how
+// this takes precedence over the computed (hours-based) outcome everywhere
+// it's read (roster status, self-service lookup, manager employee-detail).
+export const setOverride = async (req: any, res: Response, next: NextFunction) => {
+  try {
+    const { employeeId, year, month, qualified, note } = req.body;
+
+    // Future months have no settled outcome yet to correct.
+    const targetMonth = moment({ year, month: month - 1, day: 1 });
+    if (targetMonth.isAfter(moment().startOf('month'))) {
+      return res.status(400).json({ error: { message: 'Cannot set an incentive override for a future month.' } });
+    }
+
+    const employeeDoc = await db.collection('employees').doc(employeeId).get();
+    if (!employeeDoc.exists) {
+      return res.status(404).json({ error: { message: 'Employee not found.' } });
+    }
+
+    await setIncentiveOverride(employeeId, year, month, qualified, note, {
+      employeeId: req.user.employeeId,
+      name: req.user.name,
+    });
+    res.json({ message: 'Incentive override saved' });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// DELETE /api/incentives/override/:employeeId/:year/:month
+// Reverts a month back to its computed (hours-based) outcome.
+export const clearOverride = async (req: any, res: Response, next: NextFunction) => {
+  try {
+    const { employeeId } = req.params;
+    const year = parseInt(req.params.year, 10);
+    const month = parseInt(req.params.month, 10);
+    if (!Number.isInteger(year) || !Number.isInteger(month) || month < 1 || month > 12) {
+      return res.status(400).json({ error: { message: 'Invalid year/month.' } });
+    }
+
+    await clearIncentiveOverride(employeeId, year, month);
+    res.json({ message: 'Incentive override cleared' });
   } catch (error) {
     next(error);
   }

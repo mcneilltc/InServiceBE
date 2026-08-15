@@ -23,12 +23,16 @@ const getBucketName = () => {
 const SIGNED_URL_EXPIRY_SECONDS = 5 * 60;
 
 // `downloadFilename` sets Content-Disposition on the signed URL so the
-// browser saves the file under a clean name instead of the raw R2 key.
+// browser saves the file under a clean name instead of the raw R2 key. With
+// no filename, Content-Disposition is set to `inline` explicitly (not just
+// omitted) — some browser/PDF-viewer combinations otherwise default a
+// disposition-less response to "download" instead of rendering it, which is
+// what was happening in the Sign-In Sheets preview modal's <iframe>.
 async function getSignedSheetImageUrl(key: string, downloadFilename?: string): Promise<string> {
   const command = new GetObjectCommand({
     Bucket: getBucketName(),
     Key: key,
-    ...(downloadFilename ? { ResponseContentDisposition: `attachment; filename="${downloadFilename}"` } : {}),
+    ResponseContentDisposition: downloadFilename ? `attachment; filename="${downloadFilename}"` : 'inline',
   });
   return getSignedUrl(r2Client, command, { expiresIn: SIGNED_URL_EXPIRY_SECONDS });
 }

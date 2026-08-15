@@ -5,11 +5,14 @@ import { rolesAtLeast } from '../utils/roles';
 import {
   tierSchema,
   updateTierSchema,
+  overrideSchema,
   getAllTiers,
   createTier,
   updateTier,
   deleteTier,
   getIncentiveStatus,
+  setOverride,
+  clearOverride,
 } from '../controllers/incentiveController';
 
 const router = express.Router();
@@ -24,5 +27,7 @@ router.post('/tiers', requireRole(SUPERVISOR), validate(tierSchema), createTier)
 router.put('/tiers/:id', requireRole(SUPERVISOR), validate(updateTierSchema), updateTier);
 router.delete('/tiers/:id', requireRole(SUPERVISOR), deleteTier);
 router.get('/status', requireRole(SUPERVISOR), getIncentiveStatus);
+router.put('/override', requireRole(SUPERVISOR), validate(overrideSchema), setOverride);
+router.delete('/override/:employeeId/:year/:month', requireRole(SUPERVISOR), clearOverride);
 
 export default router;

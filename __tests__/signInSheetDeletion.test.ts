@@ -91,6 +91,23 @@ describe('DELETE sign-in sheets — role-based permission', () => {
       expect(sendMock).not.toHaveBeenCalled();
     });
 
+    // Regression: the record and the file are cleaned up independently — a
+    // storage-side failure must not leave the session stuck showing a photo
+    // that can never be removed.
+    it('still clears the record even when the R2 delete fails', async () => {
+      const employeeId = await makeActor('seniorSupervisor');
+      const sessionId = await makeSession();
+      sendMock.mockRejectedValueOnce(new Error('R2 is having a bad day'));
+
+      const response = await request(app)
+        .delete(`/api/sessions/${sessionId}/images/0`)
+        .set('Cookie', authCookie({ role: 'seniorSupervisor', employeeId }));
+
+      expect(response.status).toBe(200);
+      const saved = await db.collection('sessions').doc(sessionId).get();
+      expect(saved.data()?.sheetImageKeys).toEqual(['signin-sheets/2026/06/photo-2.jpg']);
+    });
+
     it('rejects a trainer (supervisor-only route)', async () => {
       const sessionId = await makeSession();
       const response = await request(app)
@@ -140,6 +157,24 @@ describe('DELETE sign-in sheets — role-based permission', () => {
         .set('Cookie', authCookie({ role: 'seniorSupervisor', employeeId }));
 
       expect(response.status).toBe(404);
+    });
+
+    // Regression: the record and the file are cleaned up independently — a
+    // storage-side failure (e.g. the object was already removed some other
+    // way) must not leave the session stuck showing a sheet that can never
+    // be cleared.
+    it('still clears the record even when the R2 delete fails', async () => {
+      const employeeId = await makeActor('seniorSupervisor');
+      const sessionId = await makeSession();
+      sendMock.mockRejectedValueOnce(new Error('R2 is having a bad day'));
+
+      const response = await request(app)
+        .delete(`/api/sessions/${sessionId}/inservice-sheet`)
+        .set('Cookie', authCookie({ role: 'seniorSupervisor', employeeId }));
+
+      expect(response.status).toBe(200);
+      const saved = await db.collection('sessions').doc(sessionId).get();
+      expect(saved.data()?.inserviceSheetKey).toBeNull();
     });
   });
 });
