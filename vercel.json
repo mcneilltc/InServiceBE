@@ -1,12 +1,4 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "buildCommand": "node scripts/build-api.js",
-  "functions": {
-    "api/index.js": {
-      "includeFiles": "node_modules/{sharp,bcrypt}/**"
-    }
-  },
-  "rewrites": [
-    { "source": "/(.*)", "destination": "/api/index" }
-  ]
+  "buildCommand": "node scripts/build-api.js"
 }
