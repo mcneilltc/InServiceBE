@@ -5,9 +5,12 @@ const { db } = require('../config/firebase');
 const { requireRole } = require('../middleware/requireRole');
 const { clampSitesToScope } = require('../services/authService');
 const moment = require('moment');
+import * as admin from 'firebase-admin';
 import { rolesAtLeast } from '../utils/roles';
 import { selfCheckin } from '../controllers/checkinController';
 import { uploadSignature } from '../services/signatureStorage';
+
+const STAFF = rolesAtLeast('trainer');
 
 // Self check-in via the electronic form is only open for a window around the
 // session's scheduled start — opens this many minutes early (so employees can
@@ -156,6 +159,73 @@ router.post('/', async (req, res) => {
 // Self check-in using QR token + badge + firstName/lastName
 router.post('/self', (req, res, next) => {
   return (selfCheckin as any)(req, res, next);
+});
+
+// The roster for one specific session (as opposed to GET / below, which is a
+// cross-session recent-activity feed) — backs the "manage attendance" dialog
+// a trainer uses to mark someone as having left early, mid-session.
+router.get('/session/:sessionId', requireRole(STAFF), async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const checkinsSnap = await db.collection('checkins').where('sessionId', '==', sessionId).get();
+    const checkins: any[] = [];
+    checkinsSnap.forEach((doc: any) => checkins.push({ id: doc.id, ...doc.data() }));
+    checkins.sort((a, b) => new Date(a.checkinTime).getTime() - new Date(b.checkinTime).getTime());
+    res.json(checkins);
+  } catch (error) {
+    console.error('Error getting session check-ins:', error);
+    res.status(500).json({ message: 'Failed to get session check-ins' });
+  }
+});
+
+// Records (or, passing checkoutTime: null, clears) when a specific checked-in
+// employee actually left — lets performCloseOut credit them for real elapsed
+// attendance instead of the whole session's duration. Body: { checkoutTime?:
+// string | null } — omitted defaults to now.
+router.post('/:checkinId/checkout', requireRole(STAFF), async (req, res) => {
+  try {
+    const { checkinId } = req.params;
+    const { checkoutTime } = req.body || {};
+
+    const checkinRef = db.collection('checkins').doc(checkinId);
+    const checkinDoc = await checkinRef.get();
+    if (!checkinDoc.exists) {
+      return res.status(404).json({ message: 'Check-in not found.' });
+    }
+    const checkinData = checkinDoc.data();
+
+    // Once the session is closed out, hours are already credited from this
+    // record — a checkout time recorded here would never be read again.
+    // Correcting a number after the fact goes through the hours-edit action
+    // instead (see updateEmployeeTrainingSession in trainingSessionsController.ts).
+    const sessionDoc = await db.collection('sessions').doc(checkinData.sessionId).get();
+    if (sessionDoc.exists && sessionDoc.data()?.status === 'completed') {
+      return res.status(400).json({
+        message: "This session has already been closed out — use the hours-edit action on the employee's record instead.",
+      });
+    }
+
+    if (checkoutTime === null) {
+      await checkinRef.update({ checkoutTime: admin.firestore.FieldValue.delete() });
+      return res.json({ message: 'Checkout cleared.' });
+    }
+
+    const resolvedCheckoutTime = checkoutTime || new Date().toISOString();
+    const parsedCheckout = new Date(resolvedCheckoutTime);
+    if (isNaN(parsedCheckout.getTime())) {
+      return res.status(400).json({ message: 'Invalid checkoutTime.' });
+    }
+    const parsedCheckin = checkinData.checkinTime ? new Date(checkinData.checkinTime) : null;
+    if (parsedCheckin && parsedCheckout.getTime() < parsedCheckin.getTime()) {
+      return res.status(400).json({ message: 'Checkout time cannot be before check-in time.' });
+    }
+
+    await checkinRef.update({ checkoutTime: resolvedCheckoutTime });
+    res.json({ message: 'Checkout recorded.', checkoutTime: resolvedCheckoutTime });
+  } catch (error) {
+    console.error('Error recording checkout:', error);
+    res.status(500).json({ message: 'Failed to record checkout.' });
+  }
 });
 
 // Get recent check-ins — supervisor only (manager dashboard "Recent Check-Ins"

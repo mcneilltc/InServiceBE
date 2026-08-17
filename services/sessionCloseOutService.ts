@@ -114,7 +114,12 @@ export async function performCloseOut(sessionId: string, options: CloseOutOption
     }
 
     const checkinTime = checkin.checkinTime ? new Date(checkin.checkinTime) : effectiveStart;
-    const durationHours = fixedDurationHours != null ? fixedDurationHours : hoursBetween(checkinTime, closeOutTime);
+    // An employee who left before the session's own close-out (see
+    // routes/checkin.ts's POST /:checkinId/checkout) is credited only up to
+    // when they actually left, not everyone else's shared close-out time.
+    const checkoutTime = checkin.checkoutTime ? new Date(checkin.checkoutTime) : null;
+    const employeeEndTime = checkoutTime && checkoutTime.getTime() < closeOutTime.getTime() ? checkoutTime : closeOutTime;
+    const durationHours = fixedDurationHours != null ? fixedDurationHours : hoursBetween(checkinTime, employeeEndTime);
 
     const trainingSessionData: any = {
       date: sessionData.date,
@@ -128,6 +133,10 @@ export async function performCloseOut(sessionId: string, options: CloseOutOption
       createdAt: new Date().toISOString(),
     };
     if (fixedDurationHours != null) trainingSessionData.autoClosed = true;
+    // Traceable on the credited record itself — distinct from autoClosed
+    // above (that's the whole-session 24h fallback; this is one person
+    // leaving early from an otherwise normal close-out).
+    if (checkin.checkoutTime) trainingSessionData.checkedOutAt = checkin.checkoutTime;
 
     await employeeRef.collection('trainingSessions').add(trainingSessionData);
     await employeeRef.update({

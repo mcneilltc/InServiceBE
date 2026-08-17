@@ -8,6 +8,14 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
+      # Belt-and-suspenders alongside the process.env.TZ pin at the top of
+      # app.ts (that's what actually guarantees it — this just keeps the
+      # platform's own view of the service's env vars honest too). Render
+      # containers default to UTC otherwise, which breaks every local-time
+      # assumption this app makes (session start times, the self-checkin
+      # window, compliance month boundaries).
+      - key: TZ
+        value: America/New_York
       # Values for everything below are set manually in the Render dashboard
       # (Environment tab) — never committed here. See the list this project
       # has settled on across the Vercel attempts for what's actually needed:

@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
+import * as admin from 'firebase-admin';
 import { db } from '../config/firebase';
 import { z } from 'zod';
 import moment from 'moment';
@@ -65,6 +66,12 @@ export const getEmployeeSessions = async (req: Request, res: Response, next: Nex
         topics: session.topics || (session.topic ? [session.topic] : []),
         trainer: session.trainer,
         date: session.date,
+        location: session.location,
+        // These per-employee credited records only ever store a duration
+        // (see performCloseOut in sessionCloseOutService.ts) — there's no
+        // startTime/endTime on them, since close-out credits real elapsed
+        // time from check-in, not a scheduled time-of-day.
+        length: parseFloat(session.length) || 0,
         participants: session.trainees ? session.trainees.length : 0,
         status: session.status || 'completed'
       });
@@ -76,30 +83,34 @@ export const getEmployeeSessions = async (req: Request, res: Response, next: Nex
   }
 };
 
+// Manual-hours-adding/editing is bundled into Senior Supervisor and up (see
+// utils/roles.ts) — a plain Supervisor never has it. Checked live against
+// Firestore rather than req.user.role (the session JWT's baked-in claim) —
+// that claim is only refreshed on login or requireRole's sliding mid-session
+// renewal (which re-signs the *same* claims), so a demotion would otherwise
+// have no effect on an already-active session for up to ~12 hours. Trainers
+// are unaffected regardless (this was never gated for them). Returns true if
+// the caller is allowed to proceed.
+async function hasManualHoursPermission(user: any): Promise<boolean> {
+  if (!user?.role || user.role === 'trainer') return true;
+  // No employeeId on the session to look up (shouldn't happen for a real
+  // login — authService.resolveRole always sets it — but fall back to the
+  // JWT claim rather than crashing on Firestore's .doc(falsy)).
+  const liveRole = user.employeeId
+    ? (await db.collection('employees').doc(user.employeeId).get()).data()?.role
+    : user.role;
+  return rolesAtLeast('seniorSupervisor').includes(liveRole);
+}
+
+const MANUAL_HOURS_DENIED_MESSAGE = 'You do not have permission to manually add hours for employees. Contact an administrator to request access.';
+
 export const createSession = async (req: any, res: Response, next: NextFunction) => {
   try {
     // This is the single endpoint behind both the Manage Employees "Add Hours"
     // dialog and the Excel import's historical-hours step — gating it here
-    // covers both surfaces at once. Manual-hours-adding is bundled into
-    // Senior Supervisor and up (see utils/roles.ts) — a plain Supervisor
-    // never has it. Checked live against Firestore rather than req.user.role
-    // (the session JWT's baked-in claim) — that claim is only refreshed on
-    // login or requireRole's sliding mid-session renewal (which re-signs the
-    // *same* claims), so a demotion would otherwise have no effect on an
-    // already-active session for up to ~12 hours. Trainers are unaffected
-    // regardless (this was never gated for them).
-    if (req.user?.role && req.user.role !== 'trainer') {
-      // No employeeId on the session to look up (shouldn't happen for a real
-      // login — authService.resolveRole always sets it — but fall back to
-      // the JWT claim rather than crashing on Firestore's .doc(falsy)).
-      const liveRole = req.user.employeeId
-        ? (await db.collection('employees').doc(req.user.employeeId).get()).data()?.role
-        : req.user.role;
-      if (!rolesAtLeast('seniorSupervisor').includes(liveRole)) {
-        return res.status(403).json({
-          message: 'You do not have permission to manually add hours for employees. Contact an administrator to request access.',
-        });
-      }
+    // covers both surfaces at once.
+    if (!(await hasManualHoursPermission(req.user))) {
+      return res.status(403).json({ message: MANUAL_HOURS_DENIED_MESSAGE });
     }
 
     const { date, location, startTime, length, topics, trainer, trainees } = req.body;
@@ -180,6 +191,65 @@ export const createSession = async (req: any, res: Response, next: NextFunction)
       message: 'Training session added', 
       sessionId: docRef.id, 
       session: { id: docRef.id, ...sessionData }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Corrects an already-credited session's hours for one employee — e.g. they
+// left before the session's close-out, so performCloseOut's "checkin time to
+// close-out time" math over-credited them. Adjusts the credited entry and
+// the employee's totalHours by the delta (not an overwrite), so a concurrent
+// close-out crediting the same employee elsewhere can't be clobbered by a
+// stale read. Same permission tier as creating a manual entry — this is
+// exactly as sensitive an action.
+export const updateEmployeeTrainingSession = async (req: any, res: Response, next: NextFunction) => {
+  try {
+    if (!(await hasManualHoursPermission(req.user))) {
+      return res.status(403).json({ message: MANUAL_HOURS_DENIED_MESSAGE });
+    }
+
+    const { employeeId, sessionDocId } = req.params;
+    const { length } = req.body;
+    const newLength = typeof length === 'number' ? length : parseFloat(length);
+    if (!Number.isFinite(newLength) || newLength < 0) {
+      return res.status(400).json({ message: 'length must be a non-negative number.' });
+    }
+
+    const employeeRef = db.collection('employees').doc(employeeId);
+    const sessionRef = employeeRef.collection('trainingSessions').doc(sessionDocId);
+    const sessionDoc = await sessionRef.get();
+    if (!sessionDoc.exists) {
+      return res.status(404).json({ message: 'Training session record not found.' });
+    }
+
+    const previousLength = parseFloat(sessionDoc.data()?.length) || 0;
+    const delta = Math.round((newLength - previousLength) * 100) / 100;
+
+    await sessionRef.update({
+      length: newLength,
+      previousLength,
+      editedBy: req.user ? {
+        employeeId: req.user.employeeId || null,
+        name: req.user.name || null,
+        email: req.user.email || null,
+      } : null,
+      editedAt: new Date().toISOString(),
+    });
+
+    if (delta !== 0) {
+      await employeeRef.update({
+        totalHours: admin.firestore.FieldValue.increment(delta),
+        updatedAt: new Date().toISOString(),
+      });
+    }
+
+    res.json({
+      message: 'Training session hours updated.',
+      sessionId: sessionDocId,
+      length: newLength,
+      previousLength,
     });
   } catch (error) {
     next(error);
