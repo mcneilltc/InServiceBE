@@ -5,12 +5,18 @@ import { z } from 'zod';
 export const siteSchema = z.object({
   body: z.object({
     siteName: z.string().min(1, "Site name is required"),
+    // The short acronym (siteName, e.g. "ERRC") stays the canonical value
+    // used everywhere for data entry/reporting/filtering — fullName is
+    // purely a supplementary label for the sites that read a set of
+    // initials on their own (e.g. "Eastway Regional Recreation Center").
+    fullName: z.string().trim().optional(),
   })
 });
 
 export const updateSiteSchema = z.object({
   body: z.object({
     siteName: z.string().min(1, "Site name is required"),
+    fullName: z.string().trim().optional(),
   })
 });
 
@@ -44,7 +50,7 @@ export const getSiteById = async (req: Request, res: Response, next: NextFunctio
 
 export const createSite = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { siteName } = req.body;
+    const { siteName, fullName } = req.body;
     const trimmedName = siteName.trim();
 
     const existing = await db.collection('sites').where('name', '==', trimmedName).limit(1).get();
@@ -54,6 +60,7 @@ export const createSite = async (req: Request, res: Response, next: NextFunction
 
     const siteData = {
       name: trimmedName,
+      fullName: fullName ? fullName.trim() : null,
       createdAt: new Date().toISOString()
     };
 
@@ -71,7 +78,7 @@ export const createSite = async (req: Request, res: Response, next: NextFunction
 export const updateSite = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { id } = req.params;
-    const { siteName } = req.body;
+    const { siteName, fullName } = req.body;
     const trimmedName = siteName.trim();
 
     const docRef = db.collection('sites').doc(id);
@@ -86,10 +93,11 @@ export const updateSite = async (req: Request, res: Response, next: NextFunction
       return res.status(409).json({ error: { message: `A site named "${trimmedName}" already exists.` } });
     }
 
-    const updateData = {
+    const updateData: any = {
       name: trimmedName,
       updatedAt: new Date().toISOString()
     };
+    if (fullName !== undefined) updateData.fullName = fullName ? fullName.trim() : null;
 
     await docRef.update(updateData);
     res.json({
