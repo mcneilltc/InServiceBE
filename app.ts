@@ -1,4 +1,20 @@
 
+// Pins the whole process to the county's own timezone — must be the very
+// first thing that runs, before anything (dotenv included) has a chance to
+// construct a Date or call moment(). This app is single-region (Mecklenburg
+// County, NC) and every bare date/time string it stores or parses — session
+// dates, startTime, the self-checkin window below, parseLocalDate — is
+// written and read on the implicit assumption that "local time" means
+// America/New_York. That assumption was never actually true unless the host
+// environment happens to be configured that way: Render/Vercel containers
+// default to UTC when TZ is unset, which silently shifted every local-time
+// comparison by the UTC offset. Concretely, this is what caused a real
+// incident: a trainer's QR check-in 5 minutes before a session's start was
+// rejected as "self check-in has closed," because routes/checkin.ts's
+// moment()-based window math was being evaluated against UTC "now" while the
+// session's startTime string was parsed as if it were already UTC.
+process.env.TZ = 'America/New_York';
+
 // Load .env before anything else — several modules (config/firebase.ts,
 // middleware/requireRole.ts, routes/auth.ts) read process.env at import time,
 // so this must run first regardless of require/import order elsewhere.

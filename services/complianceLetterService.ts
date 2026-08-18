@@ -10,6 +10,10 @@ import { wrapText } from '../utils/pdfText';
 const MONTHLY_THRESHOLD = 4;
 const MIN_SESSIONS = 4;
 const MAX_SESSIONS = 10;
+// How many date->today-or-later session docs to pull before filtering to
+// status === 'scheduled' and taking the soonest MAX_SESSIONS — see the
+// comment on getUpcomingSessions for why this exists.
+const SESSIONS_QUERY_LIMIT = 50;
 
 // The org's seal, kept from the original Word letterhead — everything else
 // in that template (the "Park and Recreation Department" word-art logo) was
@@ -34,13 +38,32 @@ interface UpcomingSession {
 // always shows company-wide opportunities, not just the employee's own site,
 // per how this is meant to be used (a lifeguard can pick up inservice
 // anywhere, not just their home location).
+//
+// Filtered by `date` range (not `status` equality) on purpose: this project
+// has no firestore.indexes.json, and a `status == 'scheduled'` equality
+// combined with a `date` range/orderBy needs a composite index Firestore
+// won't build automatically — the query would just fail. Ranging on `date`
+// alone only needs the automatic single-field index every field already
+// has. It's also the fix for the actual read-cap problem: the old
+// `status == 'scheduled'` query with no bound read every session ever
+// scheduled (nothing ever flips old ones out of that status), once per
+// letter send/download — a supervisor working through several employees in
+// a row could burn hundreds of reads for 10 rows each time. Bounding by
+// "today or later" is both a naturally small set for a real roster AND caps
+// the read count regardless of how much stale history piles up.
 async function getUpcomingSessions(): Promise<UpcomingSession[]> {
-  const snap = await db.collection('sessions').where('status', '==', 'scheduled').get();
+  const todayStr = moment().format('YYYY-MM-DD');
+  const snap = await db.collection('sessions')
+    .where('date', '>=', todayStr)
+    .orderBy('date')
+    .limit(SESSIONS_QUERY_LIMIT)
+    .get();
   const todayStart = moment().startOf('day').toDate();
 
   const upcoming: (UpcomingSession & { _sortDate: Date; _sortTime: number })[] = [];
   snap.forEach((doc) => {
     const s = doc.data();
+    if (s.status !== 'scheduled') return;
     const d = parseLocalDate(s.date);
     if (!d || d < todayStart) return;
     const startMoment = moment(s.startTime || '', ['hh:mm A', 'h:mm A', 'HH:mm'], true);

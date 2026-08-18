@@ -7,7 +7,8 @@ import {
   getAllSessions,
   getEmployeeSessions,
   createSession,
-  createTrainingOffering
+  createTrainingOffering,
+  updateEmployeeTrainingSession
 } from '../controllers/trainingSessionsController';
 
 const router = express.Router();
@@ -24,5 +25,10 @@ router.get('/employee/:employeeId', getEmployeeSessions);
 router.post('/', requireRole(STAFF), validate(sessionSchema), createTrainingOffering);
 // POST /:employeeId registers an employee in a training
 router.post('/:employeeId', requireRole(STAFF), validate(sessionSchema), createSession);
+
+// PATCH /:employeeId/:sessionDocId corrects an already-credited session's
+// hours for one employee (e.g. they left before close-out) — see
+// updateEmployeeTrainingSession for the permission tier and delta logic.
+router.patch('/:employeeId/:sessionDocId', requireRole(STAFF), updateEmployeeTrainingSession);
 
 export default router;

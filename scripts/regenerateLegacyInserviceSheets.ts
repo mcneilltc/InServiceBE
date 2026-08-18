@@ -7,6 +7,14 @@
 // the session's inserviceSheetKey at it, and deletes the old .docx object.
 //
 // Run with --apply to write; without it, just reports what would happen.
+//
+// Pinned here (not just in app.ts) because this script runs standalone via
+// ts-node, never importing app.ts — generateInserviceSheet() below formats
+// absolute checkin/close-out timestamps with moment(...).format('h:mm A'),
+// which is only correct if the process's local zone is actually Eastern.
+// Must come before the `moment` import takes effect anywhere in this file.
+process.env.TZ = 'America/New_York';
+
 import moment from 'moment';
 import { PutObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
 import { db } from '../config/firebase';

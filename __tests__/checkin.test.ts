@@ -5,6 +5,20 @@ const { db } = require('../config/firebase');
 const moment = require('moment');
 const { authCookie } = require('./testHelpers');
 
+// Regression test for a real incident: a trainer's QR check-in 5 minutes
+// before a session's start was rejected as "self check-in has closed."
+// Root cause was that app.ts never pinned the process's timezone, so on a
+// host that defaults to UTC (Render/Vercel do), moment()'s "now" and the
+// session's date+startTime string were evaluated in different effective
+// zones. The other tests in this file build both sides from moment() itself
+// (self-consistent under any TZ), so they can't catch this class of bug —
+// this one instead checks the actual guarantee app.ts now makes.
+describe('process timezone pin', () => {
+  it('pins the process to America/New_York so local-time parsing (session startTime, the self-checkin window, parseLocalDate) is unambiguous regardless of the host\'s default timezone', () => {
+    expect(process.env.TZ).toBe('America/New_York');
+  });
+});
+
 // Runs against the local Firestore emulator (see jest.setup.js) — safe to
 // create/delete real-looking documents here.
 describe('POST /api/checkin — self check-in start-time cutoff', () => {
